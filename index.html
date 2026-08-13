@@ -168,6 +168,14 @@
           ></textarea>
         </div>
         <button
+          type="button"
+          id="image-btn"
+          title="Gerar uma imagem"
+          class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-brand-300 flex items-center justify-center transition-all border border-slate-700 shrink-0"
+        >
+          <i class="fa-solid fa-image text-sm"></i>
+        </button>
+        <button
           type="submit"
           id="send-btn"
           class="h-11 w-11 sm:w-12 rounded-xl bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-600/20 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
@@ -176,7 +184,7 @@
         </button>
       </form>
       <div class="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500">
-        <span>Premir <kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> para enviar</span>
+        <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> envia · <code class="text-brand-400">/imagem</code> desenha</span>
         <span id="message-counter">0 mensagens na sessão</span>
       </div>
     </footer>
@@ -215,6 +223,21 @@
             <label class="block font-semibold text-slate-200 mb-1 mt-3">Endpoint da API do Space</label>
             <input type="text" id="setting-hf-endpoint" placeholder="deixar vazio para detetar automaticamente" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
             <p class="text-[11px] text-slate-400 mt-1">O nome da função no Space, por exemplo <code class="text-brand-400">/responder</code>. Em branco, a app procura sozinha. A lista completa está em <code class="text-brand-400">https://SPACE.hf.space/?view=api</code>.</p>
+          </div>
+
+          <!-- Geração de imagens -->
+          <div class="border border-slate-800 rounded-xl p-3 bg-slate-950/40">
+            <div class="flex items-center gap-2 mb-2">
+              <i class="fa-solid fa-image text-brand-400"></i>
+              <span class="font-semibold text-slate-200">Geração de imagens</span>
+            </div>
+            <label class="block text-slate-300 mb-1">Token do Hugging Face</label>
+            <input type="password" id="setting-hf-token" placeholder="hf_..." autocomplete="off" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Fica guardado só neste browser. Criar em <code class="text-brand-400">huggingface.co/settings/tokens</code>, do tipo <em>fine-grained</em>, com a permissão <em>Inference Providers</em>.</p>
+
+            <label class="block text-slate-300 mb-1 mt-3">Modelo</label>
+            <input type="text" id="setting-image-model" placeholder="black-forest-labs/FLUX.1-schnell" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Sem token, o botão de imagem avisa e não gasta nada.</p>
           </div>
 
           <!-- Campo Custom API / FastAPI -->
@@ -278,6 +301,8 @@
       provider: localStorage.getItem("chat_provider") || "demo",
       hfSpace: localStorage.getItem("chat_hf_space") || "",
       hfEndpoint: localStorage.getItem("chat_hf_endpoint") || "",
+      hfToken: localStorage.getItem("chat_hf_token") || "",
+      imageModel: localStorage.getItem("chat_image_model") || "black-forest-labs/FLUX.1-schnell",
       apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
@@ -304,6 +329,9 @@
     const settingProvider = document.getElementById("setting-provider");
     const settingHfSpaceId = document.getElementById("setting-hf-space-id");
     const settingHfEndpoint = document.getElementById("setting-hf-endpoint");
+    const settingHfToken = document.getElementById("setting-hf-token");
+    const settingImageModel = document.getElementById("setting-image-model");
+    const imageBtn = document.getElementById("image-btn");
     const settingApiUrl = document.getElementById("setting-api-url");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
@@ -319,6 +347,8 @@
       settingProvider.value = state.provider;
       settingHfSpaceId.value = state.hfSpace;
       settingHfEndpoint.value = state.hfEndpoint;
+      settingHfToken.value = state.hfToken;
+      settingImageModel.value = state.imageModel;
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
@@ -327,6 +357,16 @@
       updateProviderFieldsVisibility();
       updateBadge();
       setupEventListeners();
+
+      // Botão de imagem: prepara o comando na caixa de texto
+      imageBtn.addEventListener("click", () => {
+        if (!userInput.value.trim().toLowerCase().startsWith("/imagem")) {
+          userInput.value = "/imagem " + userInput.value.trim();
+        }
+        userInput.focus();
+        userInput.setSelectionRange(userInput.value.length, userInput.value.length);
+        if (!state.hfToken) showToast("Falta o token do Hugging Face nos Ajustes.", "error");
+      });
 
       // Deixa o toast disponível ao script do service worker
       window.appToast = showToast;
@@ -374,6 +414,29 @@
 
       state.isLoading = true;
       sendBtn.disabled = true;
+
+      // Comando de imagem: /imagem <descrição>
+      const pedidoImagem = userText.match(/^\/(imagem|image|img)\s+([\s\S]+)/i);
+      if (pedidoImagem) {
+        const descricao = pedidoImagem[2].trim();
+        const typingImg = appendTypingIndicator("a desenhar");
+        try {
+          const url = await gerarImagem(descricao);
+          typingImg.remove();
+          appendImageMessage(url, descricao);
+          state.messages.push({ role: "user", content: userText });
+          state.messages.push({ role: "assistant", content: `[imagem gerada: ${descricao}]` });
+          updateMessageCounter();
+        } catch (err) {
+          typingImg.remove();
+          appendMessage("assistant", `⚠️ Não consegui gerar a imagem: ${err.message}`);
+        } finally {
+          state.isLoading = false;
+          sendBtn.disabled = false;
+          userInput.focus();
+        }
+        return;
+      }
 
       const typingEl = appendTypingIndicator();
 
@@ -535,7 +598,77 @@
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
-    function appendTypingIndicator() {
+    // Gera a imagem através do router do Hugging Face; devolve um URL utilizável no <img>
+    async function gerarImagem(descricao) {
+      if (!state.hfToken) {
+        throw new Error("falta o token do Hugging Face. Abra os Ajustes e cole-o em \"Geração de imagens\".");
+      }
+      const modelo = state.imageModel || "black-forest-labs/FLUX.1-schnell";
+      const resposta = await fetch(`https://router.huggingface.co/hf-inference/models/${modelo}`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${state.hfToken}`,
+          "Content-Type": "application/json",
+          "Accept": "image/png"
+        },
+        body: JSON.stringify({ inputs: descricao })
+      });
+
+      if (!resposta.ok) {
+        const corpo = await resposta.text().catch(() => "");
+        if (resposta.status === 401 || resposta.status === 403) {
+          throw new Error("o token foi recusado. Confirme que tem a permissão \"Inference Providers\".");
+        }
+        if (resposta.status === 404) {
+          throw new Error(`o modelo "${modelo}" não está disponível por esta via. Experimente outro nos Ajustes.`);
+        }
+        if (resposta.status === 503) {
+          throw new Error("o modelo está a arrancar. Tente outra vez dentro de um minuto.");
+        }
+        throw new Error(`HTTP ${resposta.status}. ${corpo.slice(0, 160)}`);
+      }
+
+      const tipo = resposta.headers.get("content-type") || "";
+      if (tipo.includes("application/json")) {
+        const dados = await resposta.json();
+        if (dados.error) throw new Error(String(dados.error).slice(0, 160));
+        const achado = dados.url || dados.image_url || (Array.isArray(dados.images) && dados.images[0]);
+        if (typeof achado === "string") {
+          return achado.startsWith("http") ? achado : `data:image/png;base64,${achado}`;
+        }
+        throw new Error("resposta em JSON sem imagem reconhecível.");
+      }
+
+      const blob = await resposta.blob();
+      if (!blob.size) throw new Error("o servidor devolveu uma imagem vazia.");
+      return URL.createObjectURL(blob);
+    }
+
+    function appendImageMessage(url, descricao) {
+      const div = document.createElement("div");
+      div.className = "flex gap-3 text-xs sm:text-sm justify-start animate-fade-in";
+      const legenda = descricao.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const ficheiro = "imagem-" + Date.now() + ".png";
+
+      div.innerHTML = `
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md">
+          <i class="fa-solid fa-image text-xs"></i>
+        </div>
+        <div class="max-w-[80%] bg-slate-900 border border-slate-800 rounded-2xl rounded-bl-sm shadow-md overflow-hidden">
+          <img src="${url}" alt="${legenda}" class="w-full block bg-slate-950" loading="lazy">
+          <div class="px-3 py-2 flex items-start justify-between gap-3">
+            <span class="text-[11px] text-slate-400 leading-snug">${legenda}</span>
+            <a href="${url}" download="${ficheiro}" class="text-brand-400 hover:text-brand-300 shrink-0 p-1" title="Guardar imagem">
+              <i class="fa-solid fa-download text-xs"></i>
+            </a>
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(div);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function appendTypingIndicator(etiqueta) {
       const div = document.createElement("div");
       div.className = "flex gap-3 text-xs justify-start";
       div.innerHTML = `
@@ -543,7 +676,7 @@
           <i class="fa-solid fa-robot text-xs"></i>
         </div>
         <div class="bg-slate-900 text-slate-400 border border-slate-800 px-4 py-3 rounded-2xl rounded-bl-sm shadow-md flex items-center gap-2">
-          <span>${state.botName} a pensar</span>
+          <span>${state.botName} ${etiqueta || "a pensar"}</span>
           <div class="flex gap-1 items-center ml-1">
             <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
             <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
@@ -641,6 +774,8 @@
         state.provider = settingProvider.value;
         state.hfSpace = settingHfSpaceId.value.trim();
         state.hfEndpoint = settingHfEndpoint.value.trim();
+        state.hfToken = settingHfToken.value.trim();
+        state.imageModel = settingImageModel.value.trim() || "black-forest-labs/FLUX.1-schnell";
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
@@ -649,6 +784,8 @@
         localStorage.setItem("chat_provider", state.provider);
         localStorage.setItem("chat_hf_space", state.hfSpace);
         localStorage.setItem("chat_hf_endpoint", state.hfEndpoint);
+        localStorage.setItem("chat_hf_token", state.hfToken);
+        localStorage.setItem("chat_image_model", state.imageModel);
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
