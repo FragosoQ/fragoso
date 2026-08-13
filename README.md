@@ -19,6 +19,20 @@ As configurações ficam no `localStorage` do browser. Não há servidor nem bas
 
 Todos os caminhos são relativos (`./`), por isso funciona num subdiretório sem alterações.
 
+## Imagens
+
+Escrever `/imagem <descrição>` na conversa, ou carregar no botão da imagem ao lado do enviar.
+
+As imagens são geradas por um **Space** com Gradio, não pela API de inferência paga. Isso usa a quota diária de GPU das Spaces, que é gratuita. Nos Ajustes:
+
+- **Space que gera as imagens** — por exemplo `black-forest-labs/FLUX.1-schnell`.
+- **Endpoint** — em branco deteta sozinho; costuma ser `/infer`.
+- **Token do Hugging Face** — opcional. Sem token funciona com menos quota diária.
+
+Vale a pena **duplicar** o Space para a conta própria (botão *Duplicate this Space* na página do Space): fica sempre disponível, sem fila partilhada, e consome a quota própria.
+
+As imagens ficam só na sessão — usar o botão de descarregar para guardar.
+
 ## Notas importantes
 
 **HTTPS é obrigatório para o PWA.** O GitHub Pages já serve em HTTPS. Ao abrir o ficheiro directamente do disco (`file://`) o service worker não registra e não há instalação — para testar localmente, correr um servidor:

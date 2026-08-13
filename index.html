@@ -231,23 +231,17 @@
               <i class="fa-solid fa-image text-brand-400"></i>
               <span class="font-semibold text-slate-200">Geração de imagens</span>
             </div>
-            <label class="block text-slate-300 mb-1">Token do Hugging Face</label>
+            <label class="block text-slate-300 mb-1">Space que gera as imagens</label>
+            <input type="text" id="setting-image-space" placeholder="black-forest-labs/FLUX.1-schnell" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Usa a quota de GPU das Spaces, não créditos de inferência. Duplique o Space para a sua conta para não depender da fila dos outros.</p>
+
+            <label class="block text-slate-300 mb-1 mt-3">Endpoint do Space de imagens</label>
+            <input type="text" id="setting-image-endpoint" placeholder="deixar vazio para detetar automaticamente" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Normalmente <code class="text-brand-400">/infer</code>. Em branco, a app procura sozinha.</p>
+
+            <label class="block text-slate-300 mb-1 mt-3">Token do Hugging Face <span class="text-slate-500 font-normal">(opcional)</span></label>
             <input type="password" id="setting-hf-token" placeholder="hf_..." autocomplete="off" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
-            <p class="text-[11px] text-slate-400 mt-1">Fica guardado só neste browser. Criar em <code class="text-brand-400">huggingface.co/settings/tokens</code>, do tipo <em>fine-grained</em>, com a permissão <em>Inference Providers</em>.</p>
-
-            <label class="block text-slate-300 mb-1 mt-3">Modelo</label>
-            <input type="text" id="setting-image-model" placeholder="black-forest-labs/FLUX.1-dev" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
-            <p class="text-[11px] text-slate-400 mt-1">Alternativas: <code class="text-brand-400">Qwen/Qwen-Image</code>, <code class="text-brand-400">black-forest-labs/FLUX.1-schnell</code>.</p>
-
-            <label class="block text-slate-300 mb-1 mt-3">Fornecedor</label>
-            <select id="setting-image-provider" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 text-xs">
-              <option value="auto">Automático (recomendado)</option>
-              <option value="fal-ai">fal-ai</option>
-              <option value="replicate">Replicate</option>
-              <option value="together">Together</option>
-              <option value="nebius">Nebius</option>
-            </select>
-            <p class="text-[11px] text-slate-400 mt-1">Em automático, escolhe quem tiver o modelo disponível. Sem token, o botão avisa e não gasta nada.</p>
+            <p class="text-[11px] text-slate-400 mt-1">Sem token funciona, com menos quota diária de GPU. Fica guardado só neste browser.</p>
           </div>
 
           <!-- Campo Custom API / FastAPI -->
@@ -312,9 +306,9 @@
       hfSpace: localStorage.getItem("chat_hf_space") || "",
       hfEndpoint: localStorage.getItem("chat_hf_endpoint") || "",
       hfToken: localStorage.getItem("chat_hf_token") || "",
-      imageModel: localStorage.getItem("chat_image_model") || "black-forest-labs/FLUX.1-dev",
-      imageProvider: localStorage.getItem("chat_image_provider") || "auto",
-      hfInferenceClient: null,
+      imageSpace: localStorage.getItem("chat_image_space") || "black-forest-labs/FLUX.1-schnell",
+      imageEndpoint: localStorage.getItem("chat_image_endpoint") || "",
+      imageClient: null,
       apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
@@ -342,8 +336,8 @@
     const settingHfSpaceId = document.getElementById("setting-hf-space-id");
     const settingHfEndpoint = document.getElementById("setting-hf-endpoint");
     const settingHfToken = document.getElementById("setting-hf-token");
-    const settingImageModel = document.getElementById("setting-image-model");
-    const settingImageProvider = document.getElementById("setting-image-provider");
+    const settingImageSpace = document.getElementById("setting-image-space");
+    const settingImageEndpoint = document.getElementById("setting-image-endpoint");
     const imageBtn = document.getElementById("image-btn");
     const settingApiUrl = document.getElementById("setting-api-url");
     const settingBotName = document.getElementById("setting-bot-name");
@@ -361,8 +355,8 @@
       settingHfSpaceId.value = state.hfSpace;
       settingHfEndpoint.value = state.hfEndpoint;
       settingHfToken.value = state.hfToken;
-      settingImageModel.value = state.imageModel;
-      settingImageProvider.value = state.imageProvider;
+      settingImageSpace.value = state.imageSpace;
+      settingImageEndpoint.value = state.imageEndpoint;
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
@@ -379,7 +373,7 @@
         }
         userInput.focus();
         userInput.setSelectionRange(userInput.value.length, userInput.value.length);
-        if (!state.hfToken) showToast("Falta o token do Hugging Face nos Ajustes.", "error");
+        if (!state.imageSpace) showToast("Falta indicar o Space de imagens nos Ajustes.", "error");
       });
 
       // Deixa o toast disponível ao script do service worker
@@ -462,16 +456,10 @@
             throw new Error("Defina o NOME_USUARIO/SPACE nas configurações.");
           }
           if (!state.gradioClient) {
-            try {
-              const gradioModule = await import("https://cdn.jsdelivr.net/npm/@gradio/client/+esm");
-              if (!gradioModule || !gradioModule.Client) {
-                throw new Error("Cliente Gradio indisponível no CDN.");
-              }
-              const Client = gradioModule.Client;
-              state.gradioClient = await Client.connect(state.hfSpace);
-            } catch (importErr) {
-              throw new Error("Não foi possível carregar o cliente Gradio: " + importErr.message);
-            }
+            const Client = await carregarClienteGradio();
+            const opcoes = {};
+            if (state.hfToken) opcoes.hf_token = state.hfToken;
+            state.gradioClient = await Client.connect(state.hfSpace, opcoes);
           }
           const result = await chamarGradio(userText);
           botReply = normalizarRespostaGradio(result && result.data);
@@ -612,64 +600,139 @@
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
-    // Gera a imagem com o cliente oficial do Hugging Face, que encaminha para o
-    // fornecedor que ainda serve o modelo (o hf-inference já não serve vários).
-    async function gerarImagem(descricao) {
-      if (!state.hfToken) {
-        throw new Error("falta o token do Hugging Face. Abra os Ajustes e cole-o em \"Geração de imagens\".");
-      }
-      const modelo = state.imageModel || "black-forest-labs/FLUX.1-dev";
-
-      if (!state.hfInferenceClient) {
-        const mod = await import("https://cdn.jsdelivr.net/npm/@huggingface/inference/+esm")
-          .catch(err => { throw new Error("não consegui carregar o cliente do Hugging Face: " + err.message); });
-        const InferenceClient = mod.InferenceClient || mod.HfInference;
-        if (!InferenceClient) throw new Error("cliente do Hugging Face indisponível no CDN.");
-        state.hfInferenceClient = new InferenceClient(state.hfToken);
-      }
-
-      const pedido = { model: modelo, inputs: descricao };
-      if (state.imageProvider && state.imageProvider !== "auto") pedido.provider = state.imageProvider;
-
-      let saida;
-      try {
-        saida = await state.hfInferenceClient.textToImage(pedido);
-      } catch (err) {
-        throw new Error(traduzirErroImagem(err, modelo));
-      }
-
-      if (saida instanceof Blob) {
-        if (!saida.size) throw new Error("o fornecedor devolveu uma imagem vazia.");
-        return URL.createObjectURL(saida);
-      }
-      if (typeof saida === "string") {
-        return saida.startsWith("http") || saida.startsWith("data:")
-          ? saida
-          : `data:image/png;base64,${saida}`;
-      }
-      if (saida && saida.url) return saida.url;
-      throw new Error("resposta em formato desconhecido.");
+    // Carrega o cliente Gradio uma vez, partilhado entre o chat e as imagens
+    async function carregarClienteGradio() {
+      const mod = await import("https://cdn.jsdelivr.net/npm/@gradio/client/+esm")
+        .catch(err => { throw new Error("não consegui carregar o cliente Gradio: " + err.message); });
+      if (!mod || !mod.Client) throw new Error("cliente Gradio indisponível no CDN.");
+      return mod.Client;
     }
 
-    function traduzirErroImagem(err, modelo) {
+    // Descobre o endpoint e o nome do parâmetro do texto, perguntando ao próprio Space
+    async function descobrirApiImagem() {
+      let endpoint = state.imageEndpoint
+        ? (state.imageEndpoint.startsWith("/") ? state.imageEndpoint : "/" + state.imageEndpoint)
+        : null;
+      let parametro = null;
+
+      try {
+        const api = await state.imageClient.view_api();
+        const nomeados = api.named_endpoints || {};
+        if (!endpoint) {
+          const interno = /^\/(_|lambda|unnamed|load|component|on_|clear|change)/;
+          const uteis = Object.keys(nomeados).filter(n => !interno.test(n));
+          const preferidos = ["/infer", "/generate", "/generate_image", "/predict", "/run", "/text_to_image"];
+          endpoint = preferidos.find(n => uteis.includes(n)) || uteis[0] || "/infer";
+        }
+        const params = (nomeados[endpoint] || {}).parameters || [];
+        const texto = params.find(p => /prompt|text|descri/i.test(p.parameter_name || p.label || ""))
+                   || params.find(p => (p.type === "string" || p.python_type?.type === "str"));
+        if (texto) parametro = texto.parameter_name || texto.label;
+      } catch (err) {
+        if (!endpoint) endpoint = "/infer";
+      }
+      return { endpoint, parametro };
+    }
+
+    // Gera a imagem através de um Space com Gradio (usa quota de GPU, não créditos)
+    async function gerarImagem(descricao) {
+      if (!state.imageSpace) {
+        throw new Error("falta indicar o Space de imagens nos Ajustes.");
+      }
+
+      if (!state.imageClient) {
+        const Client = await carregarClienteGradio();
+        const opcoes = {};
+        if (state.hfToken) opcoes.hf_token = state.hfToken;
+        try {
+          state.imageClient = await Client.connect(state.imageSpace, opcoes);
+        } catch (err) {
+          throw new Error(traduzirErroImagem(err, state.imageSpace));
+        }
+      }
+
+      const { endpoint, parametro } = await descobrirApiImagem();
+      const tentativas = [];
+      if (parametro) tentativas.push({ [parametro]: descricao });
+      tentativas.push({ prompt: descricao }, [descricao]);
+
+      let ultimoErro;
+      for (const argumentos of tentativas) {
+        try {
+          const resultado = await state.imageClient.predict(endpoint, argumentos);
+          const url = extrairUrlImagem(resultado && resultado.data);
+          if (url) return url;
+          ultimoErro = new Error("o Space respondeu sem imagem.");
+        } catch (err) {
+          ultimoErro = err;
+          if (/No endpoint matching/i.test(String(err && err.message))) {
+            throw new Error(`o Space não tem o endpoint "${endpoint}". Veja a lista em https://SPACE.hf.space/?view=api e escreva-o nos Ajustes.`);
+          }
+        }
+      }
+      throw new Error(traduzirErroImagem(ultimoErro, state.imageSpace));
+    }
+
+    // As Spaces devolvem a imagem em formatos variados: {url}, {path}, galeria, base64...
+    function extrairUrlImagem(data) {
+      const visto = new Set();
+
+      const procurar = (valor, profundidade) => {
+        if (!valor || profundidade > 4) return null;
+        if (typeof valor === "string") {
+          if (valor.startsWith("http") || valor.startsWith("data:")) return valor;
+          if (/^[A-Za-z0-9+/=]{200,}$/.test(valor)) return "data:image/png;base64," + valor;
+          return null;
+        }
+        if (Array.isArray(valor)) {
+          for (const item of valor) {
+            const achado = procurar(item, profundidade + 1);
+            if (achado) return achado;
+          }
+          return null;
+        }
+        if (typeof valor === "object") {
+          if (visto.has(valor)) return null;
+          visto.add(valor);
+          if (typeof valor.url === "string") return valor.url;
+          if (valor.image) {
+            const achado = procurar(valor.image, profundidade + 1);
+            if (achado) return achado;
+          }
+          if (typeof valor.path === "string" && state.imageSpace) {
+            const dominio = state.imageSpace.replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+            return `https://${dominio}.hf.space/file=${valor.path}`;
+          }
+          for (const chave of Object.keys(valor)) {
+            const achado = procurar(valor[chave], profundidade + 1);
+            if (achado) return achado;
+          }
+        }
+        return null;
+      };
+
+      return procurar(data, 0);
+    }
+
+    function traduzirErroImagem(err, space) {
       const msg = String(err && err.message || err || "");
-      if (/deprecated|no longer supported/i.test(msg)) {
-        return `o modelo "${modelo}" já não é servido por este fornecedor. Nos Ajustes, ponha o fornecedor em Automático ou experimente outro modelo.`;
+      if (/quota|exceeded|zerogpu/i.test(msg)) {
+        return "a quota diária de GPU esgotou-se. Renova amanhã — ou entre com a sua conta do Hugging Face colando o token nos Ajustes, que dá mais quota.";
       }
-      if (/401|403|unauthor|invalid.*token|credentials/i.test(msg)) {
-        return "o token foi recusado. Confirme a permissão \"Inference Providers\" em huggingface.co/settings/tokens.";
+      if (/sleep|sleeping|building|starting|not running/i.test(msg)) {
+        return `o Space "${space}" está adormecido ou a arrancar. Abra-o no browser uma vez e tente daqui a um minuto.`;
       }
-      if (/402|payment|quota|credits|exceeded/i.test(msg)) {
-        return "os créditos mensais gratuitos acabaram. Veja o saldo em huggingface.co/settings/billing.";
+      if (/404|not found|could not (get|find)/i.test(msg)) {
+        return `não encontrei o Space "${space}". Confirme o nome nos Ajustes, no formato utilizador/nome-do-space.`;
       }
-      if (/404|not found|no provider/i.test(msg)) {
-        return `nenhum fornecedor tem o modelo "${modelo}" disponível. Experimente black-forest-labs/FLUX.1-dev ou Qwen/Qwen-Image.`;
+      if (/401|403|unauthor|private/i.test(msg)) {
+        return "o Space é privado ou o token foi recusado. Confirme o token nos Ajustes.";
       }
-      if (/429|rate limit|too many/i.test(msg)) {
-        return "demasiados pedidos seguidos. Espere um pouco e repita.";
+      if (/queue|full|busy/i.test(msg)) {
+        return "a fila do Space está cheia. Tente daqui a pouco, ou duplique o Space para a sua conta.";
       }
-      if (/503|loading|starting/i.test(msg)) {
-        return "o modelo está a arrancar. Tente outra vez dentro de um minuto.";
+      if (/timeout|timed out/i.test(msg)) {
+        return "o Space demorou demasiado a responder. Tente outra vez.";
       }
       return msg.slice(0, 200) || "erro desconhecido.";
     }
@@ -805,9 +868,9 @@
         state.hfSpace = settingHfSpaceId.value.trim();
         state.hfEndpoint = settingHfEndpoint.value.trim();
         state.hfToken = settingHfToken.value.trim();
-        state.imageModel = settingImageModel.value.trim() || "black-forest-labs/FLUX.1-dev";
-        state.imageProvider = settingImageProvider.value;
-        state.hfInferenceClient = null;
+        state.imageSpace = settingImageSpace.value.trim() || "black-forest-labs/FLUX.1-schnell";
+        state.imageEndpoint = settingImageEndpoint.value.trim();
+        state.imageClient = null;
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
@@ -817,8 +880,8 @@
         localStorage.setItem("chat_hf_space", state.hfSpace);
         localStorage.setItem("chat_hf_endpoint", state.hfEndpoint);
         localStorage.setItem("chat_hf_token", state.hfToken);
-        localStorage.setItem("chat_image_model", state.imageModel);
-        localStorage.setItem("chat_image_provider", state.imageProvider);
+        localStorage.setItem("chat_image_space", state.imageSpace);
+        localStorage.setItem("chat_image_endpoint", state.imageEndpoint);
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
