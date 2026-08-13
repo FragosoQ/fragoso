@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="pt-PT" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fragoso Bot — Assistente IA</title>
+  <meta name="description" content="Chatbot personalizado que corre no browser, com modo demo local, Hugging Face Space ou FastAPI." />
+
+  <!-- PWA -->
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <meta name="theme-color" content="#4f46e5" />
+  <link rel="icon" type="image/png" sizes="64x64" href="./icons/favicon-64.png" />
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Fragoso Bot" />
+  <meta name="mobile-web-app-capable" content="yes" />
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              500: '#6366f1',
+              600: '#4f46e5',
+              700: '#4338ca',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Font Awesome Icons & Google Font -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    
+    /* Scrollbar estilizada */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+
+    /* Animação de digitação */
+    .typing-dot {
+      animation: typingAnimation 1.4s infinite ease-in-out both;
+    }
+    .typing-dot:nth-child(1) { animation-delay: 0s; }
+    .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes typingAnimation {
+      0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
+    /* Entrada das mensagens */
+    .animate-fade-in {
+      animation: fadeIn 0.25s ease-out both;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .animate-fade-in, .typing-dot { animation: none; }
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col justify-between items-center p-2 sm:p-4 md:p-6">
+
+  <div class="w-full max-w-4xl bg-slate-900 rounded-2xl shadow-2xl border border-slate-800 flex flex-col h-[94vh] sm:h-[90vh] overflow-hidden relative">
+
+    <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between z-10 shrink-0">
+      <div class="flex items-center gap-3">
+        <div class="relative">
+          <div class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shadow-lg shadow-brand-500/20">
+            <i class="fa-solid fa-robot text-lg"></i>
+          </div>
+          <span id="status-indicator" class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full" title="Status de conexão"></span>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 id="app-title-display" class="font-bold text-base sm:text-lg text-slate-100">Fragoso Bot</h1>
+            <span id="connection-mode-badge" class="text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+              Modo Demo Local
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Assistente IA Interativo</p>
+        </div>
+      </div>
+
+      <!-- Ações do Cabeçalho -->
+      <div class="flex items-center gap-2">
+        <button id="install-btn" class="hidden p-2 sm:px-3 sm:py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white transition-all text-xs font-medium items-center gap-1.5 shadow-lg shadow-brand-600/20" title="Instalar aplicação">
+          <i class="fa-solid fa-download text-sm"></i>
+          <span class="hidden sm:inline">Instalar</span>
+        </button>
+        <button id="open-settings-btn" class="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-xs font-medium flex items-center gap-1.5 border border-slate-700/60">
+          <i class="fa-solid fa-gear text-sm text-slate-400"></i>
+          <span class="hidden sm:inline">Ajustes</span>
+        </button>
+        <button id="clear-chat-btn" class="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-red-500/20 hover:text-red-400 text-slate-300 transition-all text-xs font-medium flex items-center gap-1.5 border border-slate-700/60" title="Limpar Conversa">
+          <i class="fa-solid fa-trash-can text-sm"></i>
+          <span class="hidden sm:inline">Limpar</span>
+        </button>
+      </div>
+    </header>
+
+    <div id="offline-bar" class="hidden bg-amber-500/10 border-b border-amber-500/20 text-amber-300 text-[11px] px-4 py-2 flex items-center gap-2 shrink-0">
+      <i class="fa-solid fa-plug-circle-xmark"></i>
+      <span>Sem rede. O modo demo local continua a funcionar; as ligações ao Space e à API ficam indisponíveis.</span>
+    </div>
+
+    <main id="messages-container" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-950/50">
+      
+      <!-- Cartão de Boas-Vindas -->
+      <div id="welcome-card" class="text-center py-10 px-4 my-auto max-w-md mx-auto">
+        <div class="w-16 h-16 bg-brand-500/10 border border-brand-500/20 rounded-2xl flex items-center justify-center mx-auto mb-4 text-brand-400 text-2xl">
+          <i class="fa-solid fa-comments"></i>
+        </div>
+        <h2 class="text-lg font-bold text-slate-100 mb-2">Assistente Pronto!</h2>
+        <p class="text-xs sm:text-sm text-slate-400 mb-6 leading-relaxed">
+          Pode enviar mensagens no modo local de simulação, ou ligar diretamente a um <strong class="text-slate-200">Hugging Face Space</strong> ou <strong class="text-slate-200">FastAPI</strong> nos <strong class="text-slate-200">Ajustes</strong>.
+        </p>
+
+        <div class="flex flex-col gap-2 text-xs">
+          <button class="suggestion-btn text-left bg-slate-900 hover:bg-brand-600/20 hover:border-brand-500/40 border border-slate-800 text-slate-300 hover:text-brand-300 p-3 rounded-xl transition-all flex items-center gap-2">
+            <i class="fa-solid fa-bolt text-amber-400"></i>
+            <span>Olá! Como podes ajudar-me hoje?</span>
+          </button>
+          <button class="suggestion-btn text-left bg-slate-900 hover:bg-brand-600/20 hover:border-brand-500/40 border border-slate-800 text-slate-300 hover:text-brand-300 p-3 rounded-xl transition-all flex items-center gap-2">
+            <i class="fa-solid fa-code text-indigo-400"></i>
+            <span>Mostra-me um exemplo de código limpo em Python.</span>
+          </button>
+        </div>
+      </div>
+
+    </main>
+
+    <footer class="bg-slate-900 border-t border-slate-800 p-3 sm:p-4 shrink-0">
+      <form id="chat-form" class="flex items-end gap-2 sm:gap-3">
+        <div class="relative flex-1 bg-slate-950 border border-slate-800 rounded-xl focus-within:border-brand-500 transition-colors">
+          <textarea
+            id="user-input"
+            rows="1"
+            placeholder="Escreva a sua mensagem..."
+            class="w-full bg-transparent px-3 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-32"
+          ></textarea>
+        </div>
+        <button
+          type="submit"
+          id="send-btn"
+          class="h-11 w-11 sm:w-12 rounded-xl bg-brand-600 hover:bg-brand-500 active:bg-brand-700 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-600/20 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+        >
+          <i class="fa-solid fa-paper-plane text-sm"></i>
+        </button>
+      </form>
+      <div class="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500">
+        <span>Premir <kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> para enviar</span>
+        <span id="message-counter">0 mensagens na sessão</span>
+      </div>
+    </footer>
+
+    <div id="settings-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+        
+        <div class="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-sliders text-brand-400"></i>
+            <h3 class="font-bold text-slate-100 text-base">Ajustes & Conexões</h3>
+          </div>
+          <button id="close-settings-btn" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition-colors">
+            <i class="fa-solid fa-xmark text-lg"></i>
+          </button>
+        </div>
+
+        <div class="p-4 sm:p-5 space-y-4 overflow-y-auto flex-1 text-xs sm:text-sm">
+          
+          <!-- Provedor de Conexão -->
+          <div>
+            <label class="block font-semibold text-slate-200 mb-1">Origem do Chatbot</label>
+            <select id="setting-provider" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500">
+              <option value="demo">Demo Local (Simulação)</option>
+              <option value="huggingface">Hugging Face Space (Gradio Client)</option>
+              <option value="custom-api">FastAPI / Servidor Customizado</option>
+            </select>
+          </div>
+
+          <!-- Campo Hugging Face Space -->
+          <div id="field-hf-space" class="hidden">
+            <label class="block font-semibold text-slate-200 mb-1">Nome do Space no Hugging Face</label>
+            <input type="text" id="setting-hf-space-id" placeholder="exemplo: utilizador/meu-space-chat" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Formato: <code class="text-brand-400">NOME_UTILIZADOR/NOME_DO_SPACE</code></p>
+          </div>
+
+          <!-- Campo Custom API / FastAPI -->
+          <div id="field-custom-api" class="hidden">
+            <label class="block font-semibold text-slate-200 mb-1">URL Endpoint da API</label>
+            <input type="text" id="setting-api-url" placeholder="http://localhost:8000/api/chat" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+          </div>
+
+          <!-- Nome Personalizado do Robô -->
+          <div>
+            <label class="block font-semibold text-slate-200 mb-1">Nome de Exibição do Assistente</label>
+            <input type="text" id="setting-bot-name" value="Fragoso Bot" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500">
+          </div>
+
+          <!-- Personalidade & System Prompt -->
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block font-semibold text-slate-200">Personalidade & System Prompt</label>
+              <span class="text-[10px] text-brand-400 font-medium">Instruções de Tom</span>
+            </div>
+            
+            <!-- Presets Rápidos -->
+            <div class="grid grid-cols-2 gap-1.5 mb-2">
+              <button type="button" id="preset-persona-fragoso" class="px-2 py-1.5 bg-slate-950 hover:bg-brand-600/30 border border-slate-800 hover:border-brand-500 rounded-lg text-[11px] text-slate-300 text-left transition-colors flex items-center gap-1.5">
+                <i class="fa-solid fa-user-ninja text-amber-400"></i>
+                <span>Modo Fragoso</span>
+              </button>
+              <button type="button" id="preset-persona-tecnico" class="px-2 py-1.5 bg-slate-950 hover:bg-brand-600/30 border border-slate-800 hover:border-brand-500 rounded-lg text-[11px] text-slate-300 text-left transition-colors flex items-center gap-1.5">
+                <i class="fa-solid fa-terminal text-indigo-400"></i>
+                <span>Modo Técnico</span>
+              </button>
+            </div>
+
+            <textarea id="setting-system-prompt" rows="3" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-[11px] leading-relaxed resize-none"></textarea>
+          </div>
+
+        </div>
+
+        <div class="p-4 bg-slate-900 border-t border-slate-800 flex justify-end gap-2">
+          <button type="button" id="save-settings-btn" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors text-xs flex items-center gap-1.5">
+            <i class="fa-solid fa-check"></i>
+            <span>Guardar Alterações</span>
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-6 right-6 bg-slate-800 border border-slate-700 text-slate-100 px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 translate-y-20 opacity-0 transition-all duration-300 z-50 pointer-events-none text-xs">
+      <i id="toast-icon" class="fa-solid fa-circle-info text-brand-400"></i>
+      <span id="toast-message">Notificação</span>
+    </div>
+
+  </div>
+
+  <script type="module">
+    const DEFAULT_FRAGOSO_PROMPT = "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, bem-humorado, levemente irónico e extremamente prático. Fala de forma natural e descomplicada, sem enrolação académica ou formalismos excessivos. Resolve o problema primeiro e nunca peças desculpas desnecessárias.";
+
+    const state = {
+      messages: [],
+      provider: localStorage.getItem("chat_provider") || "demo",
+      hfSpace: localStorage.getItem("chat_hf_space") || "",
+      apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
+      botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
+      systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
+      isLoading: false,
+      gradioClient: null
+    };
+
+    let toastTimer = null;
+
+    // Referências do DOM
+    const messagesContainer = document.getElementById("messages-container");
+    const welcomeCard = document.getElementById("welcome-card");
+    const userInput = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const chatForm = document.getElementById("chat-form");
+    const clearChatBtn = document.getElementById("clear-chat-btn");
+    const settingsModal = document.getElementById("settings-modal");
+    const openSettingsBtn = document.getElementById("open-settings-btn");
+    const closeSettingsBtn = document.getElementById("close-settings-btn");
+    const saveSettingsBtn = document.getElementById("save-settings-btn");
+    const messageCounter = document.getElementById("message-counter");
+
+    // Inputs de Configuração
+    const settingProvider = document.getElementById("setting-provider");
+    const settingHfSpaceId = document.getElementById("setting-hf-space-id");
+    const settingApiUrl = document.getElementById("setting-api-url");
+    const settingBotName = document.getElementById("setting-bot-name");
+    const settingSystemPrompt = document.getElementById("setting-system-prompt");
+    const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
+    const presetPersonaTecnico = document.getElementById("preset-persona-tecnico");
+    const fieldHfSpace = document.getElementById("field-hf-space");
+    const fieldCustomApi = document.getElementById("field-custom-api");
+    const connectionModeBadge = document.getElementById("connection-mode-badge");
+    const statusIndicator = document.getElementById("status-indicator");
+    const appTitleDisplay = document.getElementById("app-title-display");
+
+    function init() {
+      settingProvider.value = state.provider;
+      settingHfSpaceId.value = state.hfSpace;
+      settingApiUrl.value = state.apiUrl;
+      settingBotName.value = state.botName;
+      settingSystemPrompt.value = state.systemPrompt;
+      appTitleDisplay.textContent = state.botName;
+
+      updateProviderFieldsVisibility();
+      updateBadge();
+      setupEventListeners();
+
+      // Deixa o toast disponível ao script do service worker
+      window.appToast = showToast;
+    }
+
+    function updateProviderFieldsVisibility() {
+      if (settingProvider.value === "huggingface") {
+        fieldHfSpace.classList.remove("hidden");
+        fieldCustomApi.classList.add("hidden");
+      } else if (settingProvider.value === "custom-api") {
+        fieldHfSpace.classList.add("hidden");
+        fieldCustomApi.classList.remove("hidden");
+      } else {
+        fieldHfSpace.classList.add("hidden");
+        fieldCustomApi.classList.add("hidden");
+      }
+    }
+
+    function updateBadge() {
+      if (state.provider === "huggingface") {
+        connectionModeBadge.textContent = state.hfSpace ? `HF: ${state.hfSpace}` : "HF Space Pendente";
+        connectionModeBadge.className = "text-[10px] font-medium px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20";
+        statusIndicator.className = "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-amber-500 border-2 border-slate-900 rounded-full";
+      } else if (state.provider === "custom-api") {
+        connectionModeBadge.textContent = "FastAPI / Custom API";
+        connectionModeBadge.className = "text-[10px] font-medium px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20";
+        statusIndicator.className = "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-indigo-500 border-2 border-slate-900 rounded-full";
+      } else {
+        connectionModeBadge.textContent = "Modo Demo Local";
+        connectionModeBadge.className = "text-[10px] font-medium px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20";
+        statusIndicator.className = "absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full";
+      }
+    }
+
+    async function sendMessage(userText) {
+      if (!userText.trim() || state.isLoading) return;
+
+      if (welcomeCard && !welcomeCard.classList.contains("hidden")) {
+        welcomeCard.classList.add("hidden");
+      }
+
+      appendMessage("user", userText);
+      userInput.value = "";
+      userInput.style.height = "auto";
+
+      state.isLoading = true;
+      sendBtn.disabled = true;
+
+      const typingEl = appendTypingIndicator();
+
+      try {
+        let botReply = "";
+
+        if (state.provider === "huggingface") {
+          if (!state.hfSpace) {
+            throw new Error("Defina o NOME_USUARIO/SPACE nas configurações.");
+          }
+          if (!state.gradioClient) {
+            try {
+              const gradioModule = await import("https://cdn.jsdelivr.net/npm/@gradio/client/+esm");
+              if (!gradioModule || !gradioModule.Client) {
+                throw new Error("Cliente Gradio indisponível no CDN.");
+              }
+              const Client = gradioModule.Client;
+              state.gradioClient = await Client.connect(state.hfSpace);
+            } catch (importErr) {
+              throw new Error("Não foi possível carregar o cliente Gradio: " + importErr.message);
+            }
+          }
+          const result = await state.gradioClient.predict("/chat", {
+            message: userText,
+            history: state.messages.map(m => ({ role: m.role, content: m.content }))
+          });
+          botReply = (result && result.data && result.data.length > 0) ? result.data[0] : "Sem resposta do servidor Gradio.";
+
+        } else if (state.provider === "custom-api") {
+          const response = await fetch(state.apiUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              system_prompt: state.systemPrompt,
+              history: state.messages, 
+              message: userText 
+            })
+          });
+
+          // Leitura defensiva do corpo para evitar SyntaxError: Unexpected end of input
+          const responseText = await response.text();
+          if (!responseText || !responseText.trim()) {
+            throw new Error(`O servidor respondeu com um corpo vazio (HTTP status: ${response.status}).`);
+          }
+
+          let data;
+          try {
+            data = JSON.parse(responseText);
+          } catch (jsonErr) {
+            throw new Error(`Resposta inválida do servidor (não é JSON): "${responseText.slice(0, 100)}..."`);
+          }
+
+          if (!response.ok) {
+            throw new Error(data.detail || data.error || `Erro na API (${response.status})`);
+          }
+
+          botReply = data.response || data.message || "Resposta sem conteúdo legível.";
+
+        } else {
+          await new Promise(r => setTimeout(r, 800));
+          botReply = generateDemoReply(userText);
+        }
+
+        typingEl.remove();
+        appendMessage("assistant", botReply);
+
+        state.messages.push({ role: "user", content: userText });
+        state.messages.push({ role: "assistant", content: botReply });
+        updateMessageCounter();
+
+      } catch (err) {
+        typingEl.remove();
+        appendMessage("assistant", `⚠️ **Erro na conexão:** ${err.message}`);
+        showToast(err.message, "error");
+      } finally {
+        state.isLoading = false;
+        sendBtn.disabled = false;
+      }
+    }
+
+    function appendMessage(role, text) {
+      const isUser = role === "user";
+      const div = document.createElement("div");
+      div.className = `flex gap-3 text-xs sm:text-sm ${isUser ? "justify-end" : "justify-start"} animate-fade-in`;
+
+      const safeText = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const formatted = safeText
+        .replace(/`([^`]+)`/g, '<code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">$1</code>')
+        .replace(/\n/g, "<br>")
+        .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+      const avatarHtml = isUser
+        ? `<div class="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0"><i class="fa-solid fa-user text-xs"></i></div>`
+        : `<div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md"><i class="fa-solid fa-robot text-xs"></i></div>`;
+
+      div.innerHTML = `
+        ${!isUser ? avatarHtml : ""}
+        <div class="max-w-[80%] px-4 py-3 rounded-2xl ${isUser ? "bg-brand-600 text-white rounded-br-sm" : "bg-slate-900 text-slate-200 border border-slate-800 rounded-bl-sm"} shadow-md leading-relaxed">
+          ${formatted}
+        </div>
+        ${isUser ? avatarHtml : ""}
+      `;
+
+      messagesContainer.appendChild(div);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    function appendTypingIndicator() {
+      const div = document.createElement("div");
+      div.className = "flex gap-3 text-xs justify-start";
+      div.innerHTML = `
+        <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md">
+          <i class="fa-solid fa-robot text-xs"></i>
+        </div>
+        <div class="bg-slate-900 text-slate-400 border border-slate-800 px-4 py-3 rounded-2xl rounded-bl-sm shadow-md flex items-center gap-2">
+          <span>${state.botName} a pensar</span>
+          <div class="flex gap-1 items-center ml-1">
+            <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
+            <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
+            <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
+          </div>
+        </div>
+      `;
+      messagesContainer.appendChild(div);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+      return div;
+    }
+
+    function generateDemoReply(text) {
+      const lower = text.toLowerCase();
+      if (lower.includes("olá") || lower.includes("oi") || lower.includes("boas")) {
+        return "Boas! Diz lá, o que é que estamos a resolver hoje? Sem rodeios.";
+      } else if (lower.includes("quem és") || lower.includes("quem es") || lower.includes("sobre")) {
+        return `Sou a extensão do **${state.botName}**. Treinado para ir direto à solução, sem paleio desnecessário e com a dose certa de eficácia.`;
+      } else if (lower.includes("hugging face") || lower.includes("space")) {
+        return "O Hugging Face está pronto a ligar. Abre os **Ajustes**, cola o nome do teu Space e deixa a magia funcionar por trás do pano.";
+      } else if (lower.includes("código") || lower.includes("python")) {
+        return "Código limpo e direto, como se quer:\n`print('Problema resolvido em 1 linha.')`\nPrecisas de mais detalhes ou avançamos?";
+      } else {
+        return `Ouvido alto e bom som: **"${text}"**. O sistema está 100% operacional no modo demo local.`;
+      }
+    }
+
+    function updateMessageCounter() {
+      const trocas = Math.floor(state.messages.length / 2);
+      messageCounter.textContent = `${trocas} ${trocas === 1 ? "troca" : "trocas"} na sessão`;
+    }
+
+    function showToast(msg, type = "info") {
+      const toast = document.getElementById("toast");
+      const toastMessage = document.getElementById("toast-message");
+      const toastIcon = document.getElementById("toast-icon");
+
+      toastMessage.textContent = msg;
+      toastIcon.className = type === "error" 
+        ? "fa-solid fa-circle-exclamation text-red-400" 
+        : "fa-solid fa-circle-info text-brand-400";
+
+      clearTimeout(toastTimer);
+      toast.classList.remove("translate-y-20", "opacity-0");
+      toastTimer = setTimeout(() => toast.classList.add("translate-y-20", "opacity-0"), 3000);
+    }
+
+    function setupEventListeners() {
+      chatForm.addEventListener("submit", (e) => {
+        e.preventDefault();
+        sendMessage(userInput.value);
+      });
+
+      userInput.addEventListener("input", () => {
+        userInput.style.height = "auto";
+        userInput.style.height = `${Math.min(userInput.scrollHeight, 128)}px`;
+      });
+
+      userInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          chatForm.dispatchEvent(new Event("submit"));
+        }
+      });
+
+      document.querySelectorAll(".suggestion-btn").forEach(btn => {
+        btn.addEventListener("click", () => {
+          userInput.value = btn.querySelector("span").textContent;
+          chatForm.dispatchEvent(new Event("submit"));
+        });
+      });
+
+      clearChatBtn.addEventListener("click", () => {
+        state.messages = [];
+        messagesContainer.innerHTML = "";
+        messagesContainer.appendChild(welcomeCard);
+        welcomeCard.classList.remove("hidden");
+        updateMessageCounter();
+        showToast("Histórico limpo.");
+      });
+
+      openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
+      closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
+      settingProvider.addEventListener("change", updateProviderFieldsVisibility);
+
+      presetPersonaFragoso.addEventListener("click", () => {
+        settingSystemPrompt.value = DEFAULT_FRAGOSO_PROMPT;
+      });
+
+      presetPersonaTecnico.addEventListener("click", () => {
+        settingSystemPrompt.value = "Tu és um engenheiro de software sénior. Responde apenas com factos técnicos precisos, exemplos de código concisos e arquitetura limpa. Zero floreados.";
+      });
+
+      saveSettingsBtn.addEventListener("click", () => {
+        state.provider = settingProvider.value;
+        state.hfSpace = settingHfSpaceId.value.trim();
+        state.apiUrl = settingApiUrl.value.trim();
+        state.botName = settingBotName.value.trim() || "Fragoso Bot";
+        state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
+        state.gradioClient = null;
+
+        localStorage.setItem("chat_provider", state.provider);
+        localStorage.setItem("chat_hf_space", state.hfSpace);
+        localStorage.setItem("chat_api_url", state.apiUrl);
+        localStorage.setItem("chat_bot_name", state.botName);
+        localStorage.setItem("chat_system_prompt", state.systemPrompt);
+
+        appTitleDisplay.textContent = state.botName;
+        updateBadge();
+        settingsModal.classList.add("hidden");
+        showToast("Configurações guardadas!");
+      });
+    }
+
+    window.addEventListener("DOMContentLoaded", init);
+  </script>
+
+  <!-- Registo do Service Worker, instalação e estado da rede -->
+  <script>
+    (function () {
+      const toast = (msg, type) => (window.appToast ? window.appToast(msg, type) : console.log(msg));
+
+      // 1. Service Worker (caminho relativo: funciona em https://utilizador.github.io/repo/)
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", () => {
+          navigator.serviceWorker.register("./sw.js", { scope: "./" })
+            .then(reg => {
+              reg.addEventListener("updatefound", () => {
+                const sw = reg.installing;
+                if (!sw) return;
+                sw.addEventListener("statechange", () => {
+                  if (sw.state === "installed" && navigator.serviceWorker.controller) {
+                    toast("Nova versão instalada. Recarregue para aplicar.");
+                  }
+                });
+              });
+            })
+            .catch(err => console.warn("Service Worker não registado:", err.message));
+        });
+      }
+
+      // 2. Botão de instalação
+      const installBtn = document.getElementById("install-btn");
+      let deferredPrompt = null;
+
+      window.addEventListener("beforeinstallprompt", (e) => {
+        e.preventDefault();
+        deferredPrompt = e;
+        installBtn.classList.remove("hidden");
+        installBtn.classList.add("flex");
+      });
+
+      installBtn.addEventListener("click", async () => {
+        if (!deferredPrompt) return;
+        deferredPrompt.prompt();
+        const { outcome } = await deferredPrompt.userChoice;
+        deferredPrompt = null;
+        installBtn.classList.add("hidden");
+        installBtn.classList.remove("flex");
+        if (outcome === "accepted") toast("Aplicação instalada.");
+      });
+
+      window.addEventListener("appinstalled", () => {
+        installBtn.classList.add("hidden");
+        installBtn.classList.remove("flex");
+        deferredPrompt = null;
+      });
+
+      // 3. Estado da rede
+      const offlineBar = document.getElementById("offline-bar");
+      const paintNetwork = () => offlineBar.classList.toggle("hidden", navigator.onLine);
+      window.addEventListener("online", () => { paintNetwork(); toast("Rede restabelecida."); });
+      window.addEventListener("offline", () => { paintNetwork(); toast("Sem rede.", "error"); });
+      paintNetwork();
+    })();
+  </script>
+</body>
+</html>
