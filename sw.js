@@ -8,7 +8,7 @@
  * Ao alterar ficheiros, incrementar VERSION para forçar a atualização.
  */
 
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL_CACHE = `fragoso-bot-shell-${VERSION}`;
 const CDN_CACHE = `fragoso-bot-cdn-${VERSION}`;
 

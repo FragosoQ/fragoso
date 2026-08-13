@@ -236,8 +236,18 @@
             <p class="text-[11px] text-slate-400 mt-1">Fica guardado só neste browser. Criar em <code class="text-brand-400">huggingface.co/settings/tokens</code>, do tipo <em>fine-grained</em>, com a permissão <em>Inference Providers</em>.</p>
 
             <label class="block text-slate-300 mb-1 mt-3">Modelo</label>
-            <input type="text" id="setting-image-model" placeholder="black-forest-labs/FLUX.1-schnell" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
-            <p class="text-[11px] text-slate-400 mt-1">Sem token, o botão de imagem avisa e não gasta nada.</p>
+            <input type="text" id="setting-image-model" placeholder="black-forest-labs/FLUX.1-dev" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Alternativas: <code class="text-brand-400">Qwen/Qwen-Image</code>, <code class="text-brand-400">black-forest-labs/FLUX.1-schnell</code>.</p>
+
+            <label class="block text-slate-300 mb-1 mt-3">Fornecedor</label>
+            <select id="setting-image-provider" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 text-xs">
+              <option value="auto">Automático (recomendado)</option>
+              <option value="fal-ai">fal-ai</option>
+              <option value="replicate">Replicate</option>
+              <option value="together">Together</option>
+              <option value="nebius">Nebius</option>
+            </select>
+            <p class="text-[11px] text-slate-400 mt-1">Em automático, escolhe quem tiver o modelo disponível. Sem token, o botão avisa e não gasta nada.</p>
           </div>
 
           <!-- Campo Custom API / FastAPI -->
@@ -302,7 +312,9 @@
       hfSpace: localStorage.getItem("chat_hf_space") || "",
       hfEndpoint: localStorage.getItem("chat_hf_endpoint") || "",
       hfToken: localStorage.getItem("chat_hf_token") || "",
-      imageModel: localStorage.getItem("chat_image_model") || "black-forest-labs/FLUX.1-schnell",
+      imageModel: localStorage.getItem("chat_image_model") || "black-forest-labs/FLUX.1-dev",
+      imageProvider: localStorage.getItem("chat_image_provider") || "auto",
+      hfInferenceClient: null,
       apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
@@ -331,6 +343,7 @@
     const settingHfEndpoint = document.getElementById("setting-hf-endpoint");
     const settingHfToken = document.getElementById("setting-hf-token");
     const settingImageModel = document.getElementById("setting-image-model");
+    const settingImageProvider = document.getElementById("setting-image-provider");
     const imageBtn = document.getElementById("image-btn");
     const settingApiUrl = document.getElementById("setting-api-url");
     const settingBotName = document.getElementById("setting-bot-name");
@@ -349,6 +362,7 @@
       settingHfEndpoint.value = state.hfEndpoint;
       settingHfToken.value = state.hfToken;
       settingImageModel.value = state.imageModel;
+      settingImageProvider.value = state.imageProvider;
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
@@ -598,50 +612,66 @@
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
-    // Gera a imagem através do router do Hugging Face; devolve um URL utilizável no <img>
+    // Gera a imagem com o cliente oficial do Hugging Face, que encaminha para o
+    // fornecedor que ainda serve o modelo (o hf-inference já não serve vários).
     async function gerarImagem(descricao) {
       if (!state.hfToken) {
         throw new Error("falta o token do Hugging Face. Abra os Ajustes e cole-o em \"Geração de imagens\".");
       }
-      const modelo = state.imageModel || "black-forest-labs/FLUX.1-schnell";
-      const resposta = await fetch(`https://router.huggingface.co/hf-inference/models/${modelo}`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${state.hfToken}`,
-          "Content-Type": "application/json",
-          "Accept": "image/png"
-        },
-        body: JSON.stringify({ inputs: descricao })
-      });
+      const modelo = state.imageModel || "black-forest-labs/FLUX.1-dev";
 
-      if (!resposta.ok) {
-        const corpo = await resposta.text().catch(() => "");
-        if (resposta.status === 401 || resposta.status === 403) {
-          throw new Error("o token foi recusado. Confirme que tem a permissão \"Inference Providers\".");
-        }
-        if (resposta.status === 404) {
-          throw new Error(`o modelo "${modelo}" não está disponível por esta via. Experimente outro nos Ajustes.`);
-        }
-        if (resposta.status === 503) {
-          throw new Error("o modelo está a arrancar. Tente outra vez dentro de um minuto.");
-        }
-        throw new Error(`HTTP ${resposta.status}. ${corpo.slice(0, 160)}`);
+      if (!state.hfInferenceClient) {
+        const mod = await import("https://cdn.jsdelivr.net/npm/@huggingface/inference/+esm")
+          .catch(err => { throw new Error("não consegui carregar o cliente do Hugging Face: " + err.message); });
+        const InferenceClient = mod.InferenceClient || mod.HfInference;
+        if (!InferenceClient) throw new Error("cliente do Hugging Face indisponível no CDN.");
+        state.hfInferenceClient = new InferenceClient(state.hfToken);
       }
 
-      const tipo = resposta.headers.get("content-type") || "";
-      if (tipo.includes("application/json")) {
-        const dados = await resposta.json();
-        if (dados.error) throw new Error(String(dados.error).slice(0, 160));
-        const achado = dados.url || dados.image_url || (Array.isArray(dados.images) && dados.images[0]);
-        if (typeof achado === "string") {
-          return achado.startsWith("http") ? achado : `data:image/png;base64,${achado}`;
-        }
-        throw new Error("resposta em JSON sem imagem reconhecível.");
+      const pedido = { model: modelo, inputs: descricao };
+      if (state.imageProvider && state.imageProvider !== "auto") pedido.provider = state.imageProvider;
+
+      let saida;
+      try {
+        saida = await state.hfInferenceClient.textToImage(pedido);
+      } catch (err) {
+        throw new Error(traduzirErroImagem(err, modelo));
       }
 
-      const blob = await resposta.blob();
-      if (!blob.size) throw new Error("o servidor devolveu uma imagem vazia.");
-      return URL.createObjectURL(blob);
+      if (saida instanceof Blob) {
+        if (!saida.size) throw new Error("o fornecedor devolveu uma imagem vazia.");
+        return URL.createObjectURL(saida);
+      }
+      if (typeof saida === "string") {
+        return saida.startsWith("http") || saida.startsWith("data:")
+          ? saida
+          : `data:image/png;base64,${saida}`;
+      }
+      if (saida && saida.url) return saida.url;
+      throw new Error("resposta em formato desconhecido.");
+    }
+
+    function traduzirErroImagem(err, modelo) {
+      const msg = String(err && err.message || err || "");
+      if (/deprecated|no longer supported/i.test(msg)) {
+        return `o modelo "${modelo}" já não é servido por este fornecedor. Nos Ajustes, ponha o fornecedor em Automático ou experimente outro modelo.`;
+      }
+      if (/401|403|unauthor|invalid.*token|credentials/i.test(msg)) {
+        return "o token foi recusado. Confirme a permissão \"Inference Providers\" em huggingface.co/settings/tokens.";
+      }
+      if (/402|payment|quota|credits|exceeded/i.test(msg)) {
+        return "os créditos mensais gratuitos acabaram. Veja o saldo em huggingface.co/settings/billing.";
+      }
+      if (/404|not found|no provider/i.test(msg)) {
+        return `nenhum fornecedor tem o modelo "${modelo}" disponível. Experimente black-forest-labs/FLUX.1-dev ou Qwen/Qwen-Image.`;
+      }
+      if (/429|rate limit|too many/i.test(msg)) {
+        return "demasiados pedidos seguidos. Espere um pouco e repita.";
+      }
+      if (/503|loading|starting/i.test(msg)) {
+        return "o modelo está a arrancar. Tente outra vez dentro de um minuto.";
+      }
+      return msg.slice(0, 200) || "erro desconhecido.";
     }
 
     function appendImageMessage(url, descricao) {
@@ -775,7 +805,9 @@
         state.hfSpace = settingHfSpaceId.value.trim();
         state.hfEndpoint = settingHfEndpoint.value.trim();
         state.hfToken = settingHfToken.value.trim();
-        state.imageModel = settingImageModel.value.trim() || "black-forest-labs/FLUX.1-schnell";
+        state.imageModel = settingImageModel.value.trim() || "black-forest-labs/FLUX.1-dev";
+        state.imageProvider = settingImageProvider.value;
+        state.hfInferenceClient = null;
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
@@ -786,6 +818,7 @@
         localStorage.setItem("chat_hf_endpoint", state.hfEndpoint);
         localStorage.setItem("chat_hf_token", state.hfToken);
         localStorage.setItem("chat_image_model", state.imageModel);
+        localStorage.setItem("chat_image_provider", state.imageProvider);
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
