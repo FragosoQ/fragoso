@@ -211,6 +211,10 @@
             <label class="block font-semibold text-slate-200 mb-1">Nome do Space no Hugging Face</label>
             <input type="text" id="setting-hf-space-id" placeholder="exemplo: utilizador/meu-space-chat" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
             <p class="text-[11px] text-slate-400 mt-1">Formato: <code class="text-brand-400">NOME_UTILIZADOR/NOME_DO_SPACE</code></p>
+
+            <label class="block font-semibold text-slate-200 mb-1 mt-3">Endpoint da API do Space</label>
+            <input type="text" id="setting-hf-endpoint" placeholder="deixar vazio para detetar automaticamente" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">O nome da função no Space, por exemplo <code class="text-brand-400">/responder</code>. Em branco, a app procura sozinha. A lista completa está em <code class="text-brand-400">https://SPACE.hf.space/?view=api</code>.</p>
           </div>
 
           <!-- Campo Custom API / FastAPI -->
@@ -273,6 +277,7 @@
       messages: [],
       provider: localStorage.getItem("chat_provider") || "demo",
       hfSpace: localStorage.getItem("chat_hf_space") || "",
+      hfEndpoint: localStorage.getItem("chat_hf_endpoint") || "",
       apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
@@ -298,6 +303,7 @@
     // Inputs de Configuração
     const settingProvider = document.getElementById("setting-provider");
     const settingHfSpaceId = document.getElementById("setting-hf-space-id");
+    const settingHfEndpoint = document.getElementById("setting-hf-endpoint");
     const settingApiUrl = document.getElementById("setting-api-url");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
@@ -312,6 +318,7 @@
     function init() {
       settingProvider.value = state.provider;
       settingHfSpaceId.value = state.hfSpace;
+      settingHfEndpoint.value = state.hfEndpoint;
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
@@ -389,11 +396,8 @@
               throw new Error("Não foi possível carregar o cliente Gradio: " + importErr.message);
             }
           }
-          const result = await state.gradioClient.predict("/chat", {
-            message: userText,
-            history: state.messages.map(m => ({ role: m.role, content: m.content }))
-          });
-          botReply = (result && result.data && result.data.length > 0) ? result.data[0] : "Sem resposta do servidor Gradio.";
+          const result = await chamarGradio(userText);
+          botReply = normalizarRespostaGradio(result && result.data);
 
         } else if (state.provider === "custom-api") {
           const response = await fetch(state.apiUrl, {
@@ -445,6 +449,63 @@
         state.isLoading = false;
         sendBtn.disabled = false;
       }
+    }
+
+    // Descobre o nome do endpoint: o configurado, ou o primeiro que não seja interno do Gradio
+    async function resolverEndpointGradio() {
+      if (state.hfEndpoint) {
+        return state.hfEndpoint.startsWith("/") ? state.hfEndpoint : "/" + state.hfEndpoint;
+      }
+      try {
+        const api = await state.gradioClient.view_api();
+        const nomes = Object.keys(api.named_endpoints || {});
+        const interno = /^\/(_|lambda|unnamed|load|component|option_clicked)/;
+        const uteis = nomes.filter(n => !interno.test(n));
+        const preferidos = ["/chat", "/responder", "/predict", "/respond"];
+        return preferidos.find(n => uteis.includes(n)) || uteis[0] || "/chat";
+      } catch (err) {
+        return "/chat";
+      }
+    }
+
+    // Tenta os formatos de argumentos mais comuns do ChatInterface
+    async function chamarGradio(userText) {
+      const endpoint = await resolverEndpointGradio();
+      const historico = state.messages.map(m => ({ role: m.role, content: m.content }));
+      const tentativas = [
+        { message: userText, history: historico },
+        { message: userText },
+        [userText, historico],
+        [userText]
+      ];
+
+      let ultimoErro;
+      for (const argumentos of tentativas) {
+        try {
+          return await state.gradioClient.predict(endpoint, argumentos);
+        } catch (err) {
+          ultimoErro = err;
+          const msg = String(err && err.message || "");
+          if (/No endpoint matching/i.test(msg)) {
+            throw new Error(
+              `O Space não tem o endpoint "${endpoint}". Abra os Ajustes e escreva o nome correto no campo "Endpoint da API do Space" — a lista está em https://SPACE.hf.space/?view=api`
+            );
+          }
+        }
+      }
+      throw ultimoErro || new Error("O Space recusou todos os formatos de argumentos conhecidos.");
+    }
+
+    // A resposta pode vir como texto, par [utilizador, bot], histórico completo ou objeto
+    function normalizarRespostaGradio(data) {
+      let valor = Array.isArray(data) ? data[0] : data;
+      if (Array.isArray(valor)) valor = valor[valor.length - 1];
+      if (Array.isArray(valor)) valor = valor[valor.length - 1];
+      if (valor && typeof valor === "object") {
+        valor = valor.content || valor.text || valor.value || valor.message || "";
+      }
+      if (typeof valor === "string" && valor.trim()) return valor;
+      return "Sem resposta do Space.";
     }
 
     function appendMessage(role, text) {
@@ -579,6 +640,7 @@
       saveSettingsBtn.addEventListener("click", () => {
         state.provider = settingProvider.value;
         state.hfSpace = settingHfSpaceId.value.trim();
+        state.hfEndpoint = settingHfEndpoint.value.trim();
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
@@ -586,6 +648,7 @@
 
         localStorage.setItem("chat_provider", state.provider);
         localStorage.setItem("chat_hf_space", state.hfSpace);
+        localStorage.setItem("chat_hf_endpoint", state.hfEndpoint);
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
