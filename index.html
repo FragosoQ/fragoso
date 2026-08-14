@@ -629,7 +629,6 @@
 
       try {
         let botReply = "";
-        let hasCustomAudio = false; // <--- 1. Criamos esta bandeira aqui
 
         if (state.provider === "huggingface") {
           if (!state.hfSpace) {
@@ -655,6 +654,7 @@
             })
           });
 
+          // Leitura defensiva do corpo para evitar SyntaxError: Unexpected end of input
           const responseText = await response.text();
           if (!responseText || !responseText.trim()) {
             throw new Error(`O servidor respondeu com um corpo vazio (HTTP status: ${response.status}).`);
@@ -673,13 +673,6 @@
 
           botReply = data.response || data.message || "Resposta sem conteúdo legível.";
 
-          // <--- 2. Toca o áudio do Darth Vader e marca como reproduzido
-          if (data.audio_url) {
-            hasCustomAudio = true;
-            const audio = new Audio(data.audio_url);
-            audio.play();
-          }
-
         } else {
           await new Promise(r => setTimeout(r, 800));
           botReply = generateDemoReply(userText);
@@ -687,18 +680,13 @@
 
         typingEl.remove();
         appendMessage("assistant", botReply);
-
-        // <--- 3. Só fala a voz padrão se NÃO tiver tocado o áudio do backend
-        if (!hasCustomAudio) {
-          speakBotResponse(botReply);
-        }
+        speakBotResponse(botReply);
 
         state.messages.push({ role: "user", content: userText });
         state.messages.push({ role: "assistant", content: botReply });
         updateMessageCounter();
 
       } catch (err) {
-        
         typingEl.remove();
         appendMessage("assistant", `⚠️ **Erro na conexão:** ${err.message}`);
         showToast(err.message, "error");
