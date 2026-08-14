@@ -169,6 +169,14 @@
         </div>
         <button
           type="button"
+          id="mic-btn"
+          title="Falar (reconhecimento de voz)"
+          class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-brand-300 flex items-center justify-center transition-all border border-slate-700 shrink-0"
+        >
+          <i class="fa-solid fa-microphone text-sm"></i>
+        </button>
+        <button
+          type="button"
           id="image-btn"
           title="Gerar uma imagem"
           class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-brand-300 flex items-center justify-center transition-all border border-slate-700 shrink-0"
@@ -184,7 +192,7 @@
         </button>
       </form>
       <div class="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500">
-        <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> envia · <code class="text-brand-400">/imagem</code> desenha</span>
+        <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> envia · <kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">🎤</kbd> fala · <code class="text-brand-400">/imagem</code> desenha</span>
         <span id="message-counter">0 mensagens na sessão</span>
       </div>
     </footer>
@@ -250,6 +258,42 @@
             <input type="text" id="setting-api-url" placeholder="http://localhost:8000/api/chat" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
           </div>
 
+          <!-- Controles de Voz -->
+          <div class="border border-slate-800 rounded-xl p-3 bg-slate-950/40">
+            <div class="flex items-center gap-2 mb-3">
+              <i class="fa-solid fa-volume-high text-brand-400"></i>
+              <span class="font-semibold text-slate-200">Controles de Voz</span>
+            </div>
+            
+            <label class="flex items-center gap-2 text-slate-300 mb-3 cursor-pointer">
+              <input type="checkbox" id="setting-speech-recognition" class="rounded text-brand-500 cursor-pointer" />
+              <span>Ativar reconhecimento de voz (microfone)</span>
+            </label>
+            
+            <label class="flex items-center gap-2 text-slate-300 mb-3 cursor-pointer">
+              <input type="checkbox" id="setting-text-to-speech" class="rounded text-brand-500 cursor-pointer" />
+              <span>O bot fala as respostas (TTS)</span>
+            </label>
+            
+            <label class="block text-slate-300 mb-1">Idioma da Fala</label>
+            <select id="setting-speech-lang" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500 text-sm">
+              <option value="pt-PT">Português (Portugal)</option>
+              <option value="pt-BR">Português (Brasil)</option>
+              <option value="en-US">English (USA)</option>
+              <option value="en-GB">English (UK)</option>
+              <option value="es-ES">Español (España)</option>
+              <option value="fr-FR">Français</option>
+              <option value="de-DE">Deutsch</option>
+              <option value="it-IT">Italiano</option>
+            </select>
+            
+            <label class="block text-slate-300 mb-1 mt-3">Velocidade da Fala</label>
+            <div class="flex items-center gap-2">
+              <input type="range" id="setting-speech-rate" min="0.5" max="2" step="0.1" value="1" class="flex-1">
+              <span id="speech-rate-display" class="text-slate-400 text-sm">1.0x</span>
+            </div>
+          </div>
+
           <!-- Nome Personalizado do Robô -->
           <div>
             <label class="block font-semibold text-slate-200 mb-1">Nome de Exibição do Assistente</label>
@@ -313,7 +357,12 @@
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
       isLoading: false,
-      gradioClient: null
+      gradioClient: null,
+      speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
+      textToSpeech: localStorage.getItem("chat_text_to_speech") === "true",
+      speechLang: localStorage.getItem("chat_speech_lang") || "pt-PT",
+      speechRate: parseFloat(localStorage.getItem("chat_speech_rate") || "1.0"),
+      isListening: false
     };
 
     let toastTimer = null;
@@ -330,6 +379,7 @@
     const closeSettingsBtn = document.getElementById("close-settings-btn");
     const saveSettingsBtn = document.getElementById("save-settings-btn");
     const messageCounter = document.getElementById("message-counter");
+    const micBtn = document.getElementById("mic-btn");
 
     // Inputs de Configuração
     const settingProvider = document.getElementById("setting-provider");
@@ -349,6 +399,11 @@
     const connectionModeBadge = document.getElementById("connection-mode-badge");
     const statusIndicator = document.getElementById("status-indicator");
     const appTitleDisplay = document.getElementById("app-title-display");
+    const settingSpeechRecognition = document.getElementById("setting-speech-recognition");
+    const settingTextToSpeech = document.getElementById("setting-text-to-speech");
+    const settingSpeechLang = document.getElementById("setting-speech-lang");
+    const settingSpeechRate = document.getElementById("setting-speech-rate");
+    const speechRateDisplay = document.getElementById("speech-rate-display");
 
     function init() {
       settingProvider.value = state.provider;
@@ -360,11 +415,17 @@
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
+      settingSpeechRecognition.checked = state.speechRecognition;
+      settingTextToSpeech.checked = state.textToSpeech;
+      settingSpeechLang.value = state.speechLang;
+      settingSpeechRate.value = state.speechRate;
+      speechRateDisplay.textContent = state.speechRate.toFixed(1) + "x";
       appTitleDisplay.textContent = state.botName;
 
       updateProviderFieldsVisibility();
       updateBadge();
       setupEventListeners();
+      setupSpeechControls();
 
       // Botão de imagem: prepara o comando na caixa de texto
       imageBtn.addEventListener("click", () => {
@@ -378,6 +439,124 @@
 
       // Deixa o toast disponível ao script do service worker
       window.appToast = showToast;
+    }
+
+    // ===== FUNCIONALIDADES DE VOZ =====
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const speechSynthesis = window.speechSynthesis;
+    let recognition = null;
+
+    function initSpeechRecognition() {
+      if (!SpeechRecognition) {
+        showToast("Reconhecimento de voz não suportado neste navegador.", "error");
+        return;
+      }
+      
+      if (!recognition) {
+        recognition = new SpeechRecognition();
+        recognition.continuous = false;
+        recognition.interimResults = false;
+        recognition.lang = state.speechLang;
+        
+        recognition.onstart = () => {
+          state.isListening = true;
+          micBtn.classList.add("bg-red-500/20", "border-red-500", "text-red-400");
+          micBtn.classList.remove("bg-slate-800", "hover:bg-slate-700", "text-brand-300");
+          micBtn.title = "Escuta ativa... clique para cancelar";
+        };
+        
+        recognition.onresult = (event) => {
+          let transcript = "";
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            transcript += event.results[i][0].transcript;
+          }
+          if (transcript.trim()) {
+            userInput.value = transcript.trim();
+            userInput.focus();
+            state.isListening = false;
+            updateMicButtonStyle();
+          }
+        };
+        
+        recognition.onerror = (event) => {
+          state.isListening = false;
+          updateMicButtonStyle();
+          const errorMessages = {
+            "network": "Erro de rede. Verifique sua conexão.",
+            "no-speech": "Nenhuma fala detetada. Tente novamente.",
+            "audio-capture": "Microfone não encontrado ou sem permissão.",
+            "not-allowed": "Permissão de microfone negada."
+          };
+          const msg = errorMessages[event.error] || `Erro no reconhecimento: ${event.error}`;
+          showToast(msg, "error");
+        };
+        
+        recognition.onend = () => {
+          state.isListening = false;
+          updateMicButtonStyle();
+        };
+      }
+    }
+
+    function updateMicButtonStyle() {
+      micBtn.classList.remove("bg-red-500/20", "border-red-500", "text-red-400");
+      micBtn.classList.add("bg-slate-800", "hover:bg-slate-700", "text-brand-300");
+      micBtn.title = "Falar (reconhecimento de voz)";
+    }
+
+    function speakText(text) {
+      if (!speechSynthesis) return;
+      
+      // Cancela fala anterior se houver
+      speechSynthesis.cancel();
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = state.speechLang;
+      utterance.rate = state.speechRate;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      speechSynthesis.speak(utterance);
+    }
+
+    function setupSpeechControls() {
+      // Botão do microfone
+      micBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        if (!state.speechRecognition) {
+          showToast("Reconhecimento de voz desativado nos Ajustes.", "info");
+          return;
+        }
+        initSpeechRecognition();
+        if (state.isListening) {
+          recognition.abort();
+          state.isListening = false;
+          updateMicButtonStyle();
+        } else {
+          recognition.start();
+        }
+      });
+      
+      // Atualizar velocidade de fala em tempo real
+      settingSpeechRate.addEventListener("input", (e) => {
+        const rate = parseFloat(e.target.value);
+        speechRateDisplay.textContent = rate.toFixed(1) + "x";
+      });
+    }
+
+    // Função para falar a resposta do bot (chamada após receber resposta)
+    function speakBotResponse(text) {
+      if (state.textToSpeech && speechSynthesis && text.trim()) {
+        // Remove formatação markdown simples para não falar "**negrito**"
+        let cleanText = text
+          .replace(/\*\*(.*?)\*\*/g, "$1")
+          .replace(/`([^`]+)`/g, "$1")
+          .replace(/<[^>]+>/g, "");
+        
+        if (cleanText.trim().length > 0 && cleanText.length < 1000) {
+          speakText(cleanText);
+        }
+      }
     }
 
     function updateProviderFieldsVisibility() {
@@ -501,6 +680,7 @@
 
         typingEl.remove();
         appendMessage("assistant", botReply);
+        speakBotResponse(botReply);
 
         state.messages.push({ role: "user", content: userText });
         state.messages.push({ role: "assistant", content: botReply });
@@ -874,7 +1054,16 @@
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
+        state.speechRecognition = settingSpeechRecognition.checked;
+        state.textToSpeech = settingTextToSpeech.checked;
+        state.speechLang = settingSpeechLang.value;
+        state.speechRate = parseFloat(settingSpeechRate.value);
         state.gradioClient = null;
+        
+        // Atualizar idioma do reconhecimento de voz
+        if (recognition) {
+          recognition.lang = state.speechLang;
+        }
 
         localStorage.setItem("chat_provider", state.provider);
         localStorage.setItem("chat_hf_space", state.hfSpace);
@@ -885,6 +1074,10 @@
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
+        localStorage.setItem("chat_speech_recognition", state.speechRecognition);
+        localStorage.setItem("chat_text_to_speech", state.textToSpeech);
+        localStorage.setItem("chat_speech_lang", state.speechLang);
+        localStorage.setItem("chat_speech_rate", state.speechRate);
 
         appTitleDisplay.textContent = state.botName;
         updateBadge();
