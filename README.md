@@ -76,6 +76,23 @@ app.add_middleware(
 
 **Os ícones são obrigatórios para instalar.** A pasta `icons/` tem de conter `icon-192.png`, `icon-512.png`, `maskable-192.png`, `maskable-512.png`, `apple-touch-icon.png` e `favicon-64.png`. Sem eles o Chrome não mostra o botão **Instalar**. O service worker já tolera a ausência (não aborta a instalação), mas o PWA não fica instalável.
 
+## Voz (TTS)
+
+Mudar o **Idioma da Fala** não chega. A Web Speech API ignora `utterance.lang` na prática: se não for atribuída uma voz, o motor usa a voz por omissão do sistema — normalmente portuguesa — e lê o texto inglês com fonética portuguesa.
+
+A app passou a escolher explicitamente uma `SpeechSynthesisVoice` do idioma pedido. Em **Ajustes → Controles de Voz**:
+
+- **Voz** — lista as vozes que o sistema tem para o idioma escolhido. Em "Automática" prefere vozes locais (não dependem de rede).
+- **Ouvir amostra** — testa com uma frase no idioma selecionado, sem obrigar a guardar.
+
+Se o seletor disser *"nenhuma voz para xx-XX"*, o sistema operativo não tem essa voz instalada:
+
+- **Windows** — Definições → Hora e Idioma → Voz → Adicionar vozes.
+- **Android/iOS** — definições de acessibilidade / conversão de texto em voz.
+- **Chrome no computador** — algumas vozes Google só existem online.
+
+O idioma também é aplicado ao reconhecimento de voz (microfone).
+
 ## Modelos de voz (fase 2)
 
 `models/` e os ficheiros `*.pth` / `*.index` estão no `.gitignore` — **não vão para o GitHub**. É intencional:

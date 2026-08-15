@@ -292,12 +292,25 @@
               <option value="de-DE">Deutsch</option>
               <option value="it-IT">Italiano</option>
             </select>
-            
+
+            <label class="block text-slate-300 mb-1 mt-3">Voz</label>
+            <select id="setting-speech-voice" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500 text-sm">
+              <option value="">Automática (melhor para o idioma)</option>
+            </select>
+            <p id="speech-voice-hint" class="text-[11px] text-slate-400 mt-1">
+              Definir só o idioma não chega: sem uma voz do idioma certo, o sistema lê texto inglês com sotaque português.
+            </p>
+
             <label class="block text-slate-300 mb-1 mt-3">Velocidade da Fala</label>
             <div class="flex items-center gap-2">
               <input type="range" id="setting-speech-rate" min="0.5" max="2" step="0.1" value="1" class="flex-1">
               <span id="speech-rate-display" class="text-slate-400 text-sm">1.0x</span>
             </div>
+
+            <button type="button" id="test-voice-btn" class="mt-3 px-3 py-1.5 bg-slate-800 hover:bg-brand-600/30 border border-slate-700 hover:border-brand-500 rounded-lg text-[11px] text-slate-200 transition-colors flex items-center gap-1.5">
+              <i class="fa-solid fa-play text-brand-400"></i>
+              <span>Ouvir amostra</span>
+            </button>
           </div>
 
           <!-- Nome Personalizado do Robô -->
@@ -370,6 +383,7 @@
       speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
       textToSpeech: localStorage.getItem("chat_text_to_speech") === "true",
       speechLang: localStorage.getItem("chat_speech_lang") || "pt-PT",
+      speechVoice: localStorage.getItem("chat_speech_voice") || "",
       speechRate: parseFloat(localStorage.getItem("chat_speech_rate") || "1.0"),
       isListening: false
     };
@@ -415,6 +429,9 @@
     const settingSpeechLang = document.getElementById("setting-speech-lang");
     const settingSpeechRate = document.getElementById("setting-speech-rate");
     const speechRateDisplay = document.getElementById("speech-rate-display");
+    const settingSpeechVoice = document.getElementById("setting-speech-voice");
+    const speechVoiceHint = document.getElementById("speech-voice-hint");
+    const testVoiceBtn = document.getElementById("test-voice-btn");
 
     function init() {
       settingProvider.value = state.provider;
@@ -447,6 +464,9 @@
         userInput.setSelectionRange(userInput.value.length, userInput.value.length);
         if (!state.imageSpace) showToast("Falta indicar o Space de imagens nos Ajustes.", "error");
       });
+
+      // As vozes chegam de forma assíncrona; preenche o seletor assim que existirem.
+      carregarVozes().then(preencherSelectVozes);
 
       // Deixa o toast disponível ao script do service worker
       window.appToast = showToast;
@@ -515,19 +535,195 @@
       micBtn.title = "Falar (reconhecimento de voz)";
     }
 
+    // ===== SELEÇÃO DE VOZ =====
+    // Definir apenas `utterance.lang` NÃO troca a voz: o motor mantém a voz por
+    // omissão do sistema (normalmente pt-PT) e lê o inglês com fonética portuguesa.
+    // É obrigatório atribuir `utterance.voice` com uma voz do idioma pretendido.
+
+    let vozesCache = [];
+    let vozesPromise = null;
+
+    // getVoices() devolve [] até o motor carregar; o evento voiceschanged avisa.
+    // A promessa é memorizada: sem vozes instaladas, não se espera 3 s de cada vez.
+    function carregarVozes() {
+      if (!speechSynthesis) return Promise.resolve([]);
+      if (vozesCache.length) return Promise.resolve(vozesCache);
+      if (vozesPromise) return vozesPromise;
+      vozesPromise = new Promise((resolve) => {
+        const tentar = () => {
+          const vozes = speechSynthesis.getVoices() || [];
+          if (vozes.length) {
+            vozesCache = vozes;
+            resolve(vozes);
+            return true;
+          }
+          return false;
+        };
+        if (tentar()) return;
+        let terminado = false;
+        const aoMudar = () => {
+          if (terminado) return;
+          if (tentar()) {
+            terminado = true;
+            speechSynthesis.removeEventListener("voiceschanged", aoMudar);
+          }
+        };
+        speechSynthesis.addEventListener("voiceschanged", aoMudar);
+        // Alguns browsers nunca disparam o evento — desiste ao fim de 3 s.
+        setTimeout(() => {
+          if (terminado) return;
+          terminado = true;
+          speechSynthesis.removeEventListener("voiceschanged", aoMudar);
+          vozesCache = speechSynthesis.getVoices() || [];
+          resolve(vozesCache);
+        }, 3000);
+      });
+      return vozesPromise;
+    }
+
+    // "en_US", "en-us" e "en-US" são a mesma coisa para efeitos de comparação.
+    function normalizarLang(valor) {
+      return String(valor || "").replace(/_/g, "-").toLowerCase();
+    }
+
+    function idiomaBase(valor) {
+      return normalizarLang(valor).split("-")[0];
+    }
+
+    function vozesDoIdioma(lang) {
+      const alvo = normalizarLang(lang);
+      const base = idiomaBase(lang);
+      const exatas = vozesCache.filter(v => normalizarLang(v.lang) === alvo);
+      const doBase = vozesCache.filter(v => idiomaBase(v.lang) === base && normalizarLang(v.lang) !== alvo);
+      return exatas.concat(doBase);
+    }
+
+    // Escolhe a voz: a guardada pelo utilizador, senão a melhor do idioma pedido.
+    function escolherVoz(lang) {
+      if (!vozesCache.length) return null;
+
+      if (state.speechVoice) {
+        const guardada = vozesCache.find(v => v.voiceURI === state.speechVoice);
+        // Só respeita a voz guardada se ela servir o idioma atual.
+        if (guardada && idiomaBase(guardada.lang) === idiomaBase(lang)) return guardada;
+      }
+
+      const candidatas = vozesDoIdioma(lang);
+      if (!candidatas.length) return null;
+      // Prefere vozes locais (não dependem de rede) e marcadas como default.
+      return candidatas.find(v => v.localService && v.default)
+          || candidatas.find(v => v.localService)
+          || candidatas.find(v => v.default)
+          || candidatas[0];
+    }
+
     function speakText(text) {
       if (!speechSynthesis) return;
-      
-      // Cancela fala anterior se houver
-      speechSynthesis.cancel();
-      
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = state.speechLang;
-      utterance.rate = state.speechRate;
-      utterance.pitch = 1;
-      utterance.volume = 1;
-      
-      speechSynthesis.speak(utterance);
+      // Se as vozes ainda não carregaram, esperar — senão cairia na voz por omissão.
+      if (!vozesCache.length) {
+        carregarVozes().then(() => falarAgora(text));
+        return;
+      }
+      falarAgora(text);
+    }
+
+    function falarAgora(text) {
+      const voz = escolherVoz(state.speechLang);
+      if (!voz && vozesCache.length) {
+        showToast(`O sistema não tem nenhuma voz instalada para ${state.speechLang}.`, "error");
+      }
+
+      const falar = () => {
+        const utterance = new SpeechSynthesisUtterance(text);
+        // A ordem importa: primeiro a voz, depois o lang (para não entrarem em conflito).
+        if (voz) {
+          utterance.voice = voz;
+          utterance.lang = voz.lang;
+        } else {
+          utterance.lang = state.speechLang;
+        }
+        utterance.rate = state.speechRate;
+        utterance.pitch = 1;
+        utterance.volume = 1;
+        speechSynthesis.speak(utterance);
+      };
+
+      // O Chrome ignora um speak() disparado no mesmo tick de um cancel().
+      if (speechSynthesis.speaking || speechSynthesis.pending) {
+        speechSynthesis.cancel();
+        setTimeout(falar, 120);
+      } else {
+        falar();
+      }
+    }
+
+    // Preenche o seletor de vozes com as disponíveis para o idioma escolhido.
+    function preencherSelectVozes() {
+      const lang = settingSpeechLang.value;
+      const candidatas = vozesDoIdioma(lang);
+      const anterior = state.speechVoice;
+
+      settingSpeechVoice.innerHTML = "";
+
+      const auto = document.createElement("option");
+      auto.value = "";
+      auto.textContent = candidatas.length
+        ? `Automática (${candidatas.length} ${candidatas.length === 1 ? "voz" : "vozes"} para ${lang})`
+        : `Automática — nenhuma voz para ${lang}`;
+      settingSpeechVoice.appendChild(auto);
+
+      for (const v of candidatas) {
+        const op = document.createElement("option");
+        op.value = v.voiceURI;
+        op.textContent = `${v.name} (${v.lang})${v.localService ? "" : " · online"}`;
+        settingSpeechVoice.appendChild(op);
+      }
+
+      // Mantém a seleção se ainda for válida para este idioma.
+      settingSpeechVoice.value = candidatas.some(v => v.voiceURI === anterior) ? anterior : "";
+
+      if (!candidatas.length) {
+        speechVoiceHint.textContent =
+          `O sistema não tem vozes para ${lang}. No Windows: Definições → Hora e Idioma → Voz → Adicionar vozes. ` +
+          `Sem isso, a leitura sai com a pronúncia da voz por omissão.`;
+        speechVoiceHint.className = "text-[11px] text-amber-400 mt-1";
+      } else {
+        speechVoiceHint.textContent =
+          "Definir só o idioma não chega: sem uma voz do idioma certo, o sistema lê texto inglês com sotaque português.";
+        speechVoiceHint.className = "text-[11px] text-slate-400 mt-1";
+      }
+    }
+
+    const AMOSTRAS = {
+      "pt-PT": "Olá, esta é a voz escolhida para o assistente.",
+      "pt-BR": "Olá, esta é a voz escolhida para o assistente.",
+      "en-US": "Hello, this is the voice selected for the assistant.",
+      "en-GB": "Hello, this is the voice selected for the assistant.",
+      "es-ES": "Hola, esta es la voz elegida para el asistente.",
+      "fr-FR": "Bonjour, voici la voix choisie pour l'assistant.",
+      "de-DE": "Hallo, das ist die ausgewählte Stimme für den Assistenten.",
+      "it-IT": "Ciao, questa è la voce scelta per l'assistente."
+    };
+
+    // Testa com os valores do formulário, sem obrigar a guardar primeiro.
+    function ouvirAmostra() {
+      if (!speechSynthesis) {
+        showToast("Este browser não suporta síntese de voz.", "error");
+        return;
+      }
+      const langAnterior = state.speechLang;
+      const vozAnterior = state.speechVoice;
+      const rateAnterior = state.speechRate;
+
+      state.speechLang = settingSpeechLang.value;
+      state.speechVoice = settingSpeechVoice.value;
+      state.speechRate = parseFloat(settingSpeechRate.value) || 1;
+
+      speakText(AMOSTRAS[state.speechLang] || AMOSTRAS["pt-PT"]);
+
+      state.speechLang = langAnterior;
+      state.speechVoice = vozAnterior;
+      state.speechRate = rateAnterior;
     }
 
     function setupSpeechControls() {
@@ -560,6 +756,32 @@
       settingSpeechRate.addEventListener("input", (e) => {
         const rate = parseFloat(e.target.value);
         speechRateDisplay.textContent = rate.toFixed(1) + "x";
+      });
+
+      // Mudar o idioma tem de repovoar as vozes disponíveis
+      settingSpeechLang.addEventListener("change", () => {
+        carregarVozes().then(preencherSelectVozes);
+      });
+
+      testVoiceBtn.addEventListener("click", () => {
+        carregarVozes().then(() => ouvirAmostra());
+      });
+
+      // Vozes instaladas depois do arranque (ou motores lentos)
+      if (speechSynthesis) {
+        speechSynthesis.addEventListener("voiceschanged", () => {
+          const novas = speechSynthesis.getVoices() || [];
+          if (novas.length) {
+            vozesCache = novas;
+            vozesPromise = null;
+          }
+          preencherSelectVozes();
+        });
+      }
+
+      // Parar a fala ao sair da página evita que continue a ler noutro separador
+      window.addEventListener("pagehide", () => {
+        if (speechSynthesis) speechSynthesis.cancel();
       });
     }
 
@@ -1325,6 +1547,7 @@
         state.speechRecognition = settingSpeechRecognition.checked;
         state.textToSpeech = settingTextToSpeech.checked;
         state.speechLang = settingSpeechLang.value;
+        state.speechVoice = settingSpeechVoice.value;
         state.speechRate = parseFloat(settingSpeechRate.value);
         state.gradioClient = null;
         apiChatCache = null;
@@ -1346,6 +1569,7 @@
         localStorage.setItem("chat_speech_recognition", state.speechRecognition);
         localStorage.setItem("chat_text_to_speech", state.textToSpeech);
         localStorage.setItem("chat_speech_lang", state.speechLang);
+        localStorage.setItem("chat_speech_voice", state.speechVoice);
         localStorage.setItem("chat_speech_rate", state.speechRate);
 
         appTitleDisplay.textContent = state.botName;
