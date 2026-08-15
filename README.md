@@ -19,6 +19,18 @@ As configurações ficam no `localStorage` do browser. Não há servidor nem bas
 
 Todos os caminhos são relativos (`./`), por isso funciona num subdiretório sem alterações.
 
+## Ligar a um Hugging Face Space
+
+Cada Space declara os seus próprios nomes de parâmetros — pode ser `message`, `mensagem`, `pergunta`, `prompt`. A app já **lê a assinatura do Space** (`view_api()`) e preenche os argumentos com os nomes reais, por isso não é preciso adivinhar.
+
+Se mesmo assim falhar, abrir **Ajustes → Testar ligação e ver parâmetros**. Mostra:
+
+- os endpoints disponíveis;
+- qual está a ser usado;
+- os nomes e tipos dos parâmetros (`*` = obrigatório).
+
+Com essa informação, escrever o endpoint correto no campo **Endpoint da API do Space**.
+
 ## Imagens
 
 Escrever `/imagem <descrição>` na conversa, ou carregar no botão da imagem ao lado do enviar.
@@ -62,6 +74,25 @@ app.add_middleware(
 
 **Cache do service worker.** Depois de alterar o `index.html`, incrementar `VERSION` no `sw.js` (`v1` → `v2`), senão os visitantes que já instalaram continuam a ver a versão antiga.
 
+**Os ícones são obrigatórios para instalar.** A pasta `icons/` tem de conter `icon-192.png`, `icon-512.png`, `maskable-192.png`, `maskable-512.png`, `apple-touch-icon.png` e `favicon-64.png`. Sem eles o Chrome não mostra o botão **Instalar**. O service worker já tolera a ausência (não aborta a instalação), mas o PWA não fica instalável.
+
+## Modelos de voz (fase 2)
+
+`models/` e os ficheiros `*.pth` / `*.index` estão no `.gitignore` — **não vão para o GitHub**. É intencional:
+
+- o GitHub bloqueia ficheiros acima de 100 MB (um `.index` de RVC passa disso com frequência);
+- o GitHub Pages serve ficheiros estáticos, não executa modelos.
+
+Um modelo RVC não corre no browser. A inferência tem de ficar num **Space com GPU** ou numa API própria, e a app chama esse endpoint. Para versionar os pesos, usar Git LFS:
+
+```bash
+git lfs install
+git lfs track "*.pth" "*.index"
+git add .gitattributes
+```
+
+E remover as linhas correspondentes do `.gitignore`.
+
 ## Ficheiros
 
 | Ficheiro | O que faz |
@@ -70,4 +101,6 @@ app.add_middleware(
 | `manifest.webmanifest` | Nome, ícones, cores e modo de janela da app instalada |
 | `sw.js` | Service worker: funcionamento offline e cache |
 | `icons/` | Ícones 192/512, maskable, Apple touch e favicon |
+| `server.py` | API FastAPI de exemplo para o modo "Servidor Customizado" |
 | `.nojekyll` | Impede o GitHub Pages de processar os ficheiros com Jekyll |
+| `.gitignore` | Exclui modelos, ambientes virtuais e ficheiros de sistema |

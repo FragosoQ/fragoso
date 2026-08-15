@@ -1,5 +1,19 @@
-
+# Modelos de voz (RVC) — binários grandes, fora do Git.
+# Se quiser versioná-los, use Git LFS (ver README).
 models/
 static/
 *.index
 *.pth
+*.ckpt
+*.safetensors
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Sistema
+.DS_Store
+Thumbs.db

@@ -193,7 +193,7 @@
       </form>
       <div class="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500">
         <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> envia · <kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">🎤</kbd> fala · <code class="text-brand-400">/imagem</code> desenha</span>
-        <span id="message-counter">0 mensagens na sessão</span>
+        <span id="message-counter">0 trocas na sessão</span>
       </div>
     </footer>
 
@@ -231,6 +231,12 @@
             <label class="block font-semibold text-slate-200 mb-1 mt-3">Endpoint da API do Space</label>
             <input type="text" id="setting-hf-endpoint" placeholder="deixar vazio para detetar automaticamente" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
             <p class="text-[11px] text-slate-400 mt-1">O nome da função no Space, por exemplo <code class="text-brand-400">/responder</code>. Em branco, a app procura sozinha. A lista completa está em <code class="text-brand-400">https://SPACE.hf.space/?view=api</code>.</p>
+
+            <button type="button" id="test-space-btn" class="mt-3 px-3 py-1.5 bg-slate-800 hover:bg-brand-600/30 border border-slate-700 hover:border-brand-500 rounded-lg text-[11px] text-slate-200 transition-colors flex items-center gap-1.5 disabled:opacity-50">
+              <i class="fa-solid fa-stethoscope text-brand-400"></i>
+              <span>Testar ligação e ver parâmetros</span>
+            </button>
+            <pre id="test-space-out" class="hidden mt-2 bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[10px] text-slate-300 font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto"></pre>
           </div>
 
           <!-- Geração de imagens -->
@@ -342,6 +348,9 @@
   </div>
 
   <script type="module">
+    // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
+    const MAX_HISTORICO = 20;
+
     const DEFAULT_FRAGOSO_PROMPT = "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, bem-humorado, levemente irónico e extremamente prático. Fala de forma natural e descomplicada, sem enrolação académica ou formalismos excessivos. Resolve o problema primeiro e nunca peças desculpas desnecessárias.";
 
     const state = {
@@ -386,6 +395,8 @@
     const settingHfSpaceId = document.getElementById("setting-hf-space-id");
     const settingHfEndpoint = document.getElementById("setting-hf-endpoint");
     const settingHfToken = document.getElementById("setting-hf-token");
+    const testSpaceBtn = document.getElementById("test-space-btn");
+    const testSpaceOut = document.getElementById("test-space-out");
     const settingImageSpace = document.getElementById("setting-image-space");
     const settingImageEndpoint = document.getElementById("setting-image-endpoint");
     const imageBtn = document.getElementById("image-btn");
@@ -528,12 +539,20 @@
           return;
         }
         initSpeechRecognition();
+        if (!recognition) return;
         if (state.isListening) {
-          recognition.abort();
+          try { recognition.abort(); } catch (_) {}
           state.isListening = false;
           updateMicButtonStyle();
         } else {
-          recognition.start();
+          // start() lança InvalidStateError se já estiver a ouvir
+          try {
+            recognition.start();
+          } catch (err) {
+            state.isListening = false;
+            updateMicButtonStyle();
+            showToast("Não consegui abrir o microfone: " + err.message, "error");
+          }
         }
       });
       
@@ -638,19 +657,33 @@
             const Client = await carregarClienteGradio();
             const opcoes = {};
             if (state.hfToken) opcoes.hf_token = state.hfToken;
-            state.gradioClient = await Client.connect(state.hfSpace, opcoes);
+            try {
+              state.gradioClient = await Client.connect(state.hfSpace, opcoes);
+            } catch (err) {
+              apiChatCache = null;
+              throw new Error(explicarErroGradio(err, "—", []));
+            }
           }
           const result = await chamarGradio(userText);
           botReply = normalizarRespostaGradio(result && result.data);
 
         } else if (state.provider === "custom-api") {
+          if (!state.apiUrl) {
+            throw new Error("Defina o URL da API nos Ajustes.");
+          }
+          // Uma página em HTTPS não pode chamar http:// — o browser bloqueia sem explicação útil.
+          if (location.protocol === "https:" && /^http:\/\//i.test(state.apiUrl)
+              && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(state.apiUrl)) {
+            throw new Error("A página está em HTTPS e a API em HTTP — o browser bloqueia a chamada. Exponha a API em HTTPS (Cloudflare Tunnel, ngrok) ou abra a app localmente.");
+          }
+
           const response = await fetch(state.apiUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
               system_prompt: state.systemPrompt,
-              history: state.messages, 
-              message: userText 
+              history: historicoMensagens(),
+              message: userText
             })
           });
 
@@ -668,7 +701,11 @@
           }
 
           if (!response.ok) {
-            throw new Error(data.detail || data.error || `Erro na API (${response.status})`);
+            // O FastAPI devolve `detail` como lista nos erros de validação
+            const detalhe = Array.isArray(data.detail)
+              ? data.detail.map(d => d.msg || JSON.stringify(d)).join("; ")
+              : (typeof data.detail === "string" ? data.detail : null);
+            throw new Error(detalhe || data.error || `Erro na API (${response.status})`);
           }
 
           botReply = data.response || data.message || "Resposta sem conteúdo legível.";
@@ -696,33 +733,162 @@
       }
     }
 
+    // ===== INTROSPEÇÃO DA API DO SPACE =====
+    // O Space dita os nomes dos parâmetros (podem ser "mensagem", "pergunta", "prompt"...).
+    // Em vez de adivinhar, perguntamos ao Space e construímos os argumentos com os nomes reais.
+
+    const ENDPOINT_INTERNO = /^\/(_|lambda|unnamed|load|component|option_clicked|on_|clear|change|like|retry|undo|example|flag)/;
+
+    const PADRAO = {
+      // O histórico é testado primeiro: "messages" também casa com /message/.
+      historico: /hist[oó]ric|history|chat_?history|conversa[cç]?[aã]?o?|^messages$|mem[oó]ria/i,
+      texto: /mensagem|message|texto|^text$|prompt|pergunta|question|^input$|query|user_?input|utterance|fala/i,
+      sistema: /system|sistema|instru[cç]|persona|preamble|contexto/i,
+      temperatura: /temperature|^temp$/i,
+      maxTokens: /max_?(new_)?tokens|max_?length/i,
+      topP: /top_?p/i,
+      topK: /top_?k/i,
+      penal: /penalty|penaliza/i
+    };
+
+    function nomeParam(p) {
+      return String(p.parameter_name || p.label || "");
+    }
+
+    // O formato do campo "type" mudou entre versões do Gradio; aceita ambos.
+    function tipoParam(p) {
+      const bruto = p.type;
+      if (typeof bruto === "string") return bruto.toLowerCase();
+      if (bruto && typeof bruto === "object" && bruto.type) return String(bruto.type).toLowerCase();
+      if (p.python_type && p.python_type.type) return String(p.python_type.type).toLowerCase();
+      return "";
+    }
+
+    function temDefault(p) {
+      return p.parameter_has_default === true;
+    }
+
+    // Guarda a introspeção para não pedir view_api() a cada mensagem.
+    let apiChatCache = null;
+
+    async function obterApiChat() {
+      if (apiChatCache) return apiChatCache;
+      try {
+        apiChatCache = await state.gradioClient.view_api();
+      } catch (err) {
+        apiChatCache = { named_endpoints: {}, unnamed_endpoints: {} };
+      }
+      return apiChatCache;
+    }
+
     // Descobre o nome do endpoint: o configurado, ou o primeiro que não seja interno do Gradio
     async function resolverEndpointGradio() {
       if (state.hfEndpoint) {
         return state.hfEndpoint.startsWith("/") ? state.hfEndpoint : "/" + state.hfEndpoint;
       }
-      try {
-        const api = await state.gradioClient.view_api();
-        const nomes = Object.keys(api.named_endpoints || {});
-        const interno = /^\/(_|lambda|unnamed|load|component|option_clicked)/;
-        const uteis = nomes.filter(n => !interno.test(n));
-        const preferidos = ["/chat", "/responder", "/predict", "/respond"];
-        return preferidos.find(n => uteis.includes(n)) || uteis[0] || "/chat";
-      } catch (err) {
-        return "/chat";
-      }
+      const api = await obterApiChat();
+      const nomes = Object.keys(api.named_endpoints || {});
+      const uteis = nomes.filter(n => !ENDPOINT_INTERNO.test(n));
+      const preferidos = ["/chat", "/responder", "/conversar", "/predict", "/respond", "/run"];
+      return preferidos.find(n => uteis.includes(n)) || uteis[0] || "/chat";
     }
 
-    // Tenta os formatos de argumentos mais comuns do ChatInterface
+    function historicoMensagens() {
+      return state.messages
+        .slice(-MAX_HISTORICO)
+        .map(m => ({ role: m.role, content: String(m.content ?? "") }));
+    }
+
+    // Alguns ChatInterface antigos esperam pares [utilizador, bot] em vez de {role, content}.
+    function historicoPares() {
+      const pares = [];
+      const msgs = historicoMensagens();
+      for (let i = 0; i < msgs.length; i += 2) {
+        pares.push([msgs[i] ? msgs[i].content : "", msgs[i + 1] ? msgs[i + 1].content : ""]);
+      }
+      return pares;
+    }
+
+    // Preenche cada parâmetro do Space pelo nome que ele próprio declara.
+    function construirArgsChat(params, userText, historico) {
+      const args = {};
+      const usados = new Set();
+
+      const apanhar = (re) => {
+        const p = params.find(x => !usados.has(x) && re.test(nomeParam(x)));
+        if (p) usados.add(p);
+        return p;
+      };
+
+      const pHist = apanhar(PADRAO.historico);
+      const pSistema = apanhar(PADRAO.sistema);
+      let pTexto = apanhar(PADRAO.texto);
+
+      // Sem correspondência pelo nome: usa a primeira string obrigatória.
+      if (!pTexto) {
+        pTexto = params.find(x => !usados.has(x) && !temDefault(x) && /str|string|text/.test(tipoParam(x)));
+        if (pTexto) usados.add(pTexto);
+      }
+      if (!pTexto) {
+        pTexto = params.find(x => !usados.has(x));
+        if (pTexto) usados.add(pTexto);
+      }
+
+      if (pTexto) args[nomeParam(pTexto)] = userText;
+      if (pHist) args[nomeParam(pHist)] = historico;
+      if (pSistema) args[nomeParam(pSistema)] = state.systemPrompt;
+
+      // Restantes obrigatórios: usa o default declarado ou um valor neutro do tipo certo.
+      for (const p of params) {
+        if (usados.has(p)) continue;
+        const nome = nomeParam(p);
+        if (!nome) continue;
+        if (temDefault(p)) {
+          if (p.parameter_default !== undefined) args[nome] = p.parameter_default;
+          continue;
+        }
+        const t = tipoParam(p);
+        if (PADRAO.temperatura.test(nome)) args[nome] = 0.7;
+        else if (PADRAO.maxTokens.test(nome)) args[nome] = 512;
+        else if (PADRAO.topP.test(nome)) args[nome] = 0.95;
+        else if (PADRAO.topK.test(nome)) args[nome] = 50;
+        else if (PADRAO.penal.test(nome)) args[nome] = 1.0;
+        else if (/bool/.test(t)) args[nome] = false;
+        else if (/int|float|number/.test(t)) args[nome] = 0;
+        else if (/list|array/.test(t)) args[nome] = [];
+        else args[nome] = "";
+      }
+
+      return args;
+    }
+
+    // Chama o Space, começando pelos nomes reais dos parâmetros e caindo para formatos legados.
     async function chamarGradio(userText) {
       const endpoint = await resolverEndpointGradio();
-      const historico = state.messages.map(m => ({ role: m.role, content: m.content }));
-      const tentativas = [
+      const api = await obterApiChat();
+      const info = (api.named_endpoints || {})[endpoint] || {};
+      const params = Array.isArray(info.parameters) ? info.parameters : [];
+      const historico = historicoMensagens();
+
+      const tentativas = [];
+
+      if (params.length) {
+        // 1º: nomes declarados pelo Space, com histórico no formato moderno.
+        tentativas.push(construirArgsChat(params, userText, historico));
+        // 2º: o mesmo, mas com histórico em pares (ChatInterface antigo).
+        tentativas.push(construirArgsChat(params, userText, historicoPares()));
+        // 3º: posicional, pela ordem declarada.
+        const nomeados = construirArgsChat(params, userText, historico);
+        tentativas.push(params.map(p => nomeados[nomeParam(p)]));
+      }
+
+      // 4º: formatos genéricos, caso a introspeção falhe.
+      tentativas.push(
         { message: userText, history: historico },
         { message: userText },
         [userText, historico],
         [userText]
-      ];
+      );
 
       let ultimoErro;
       for (const argumentos of tentativas) {
@@ -730,15 +896,86 @@
           return await state.gradioClient.predict(endpoint, argumentos);
         } catch (err) {
           ultimoErro = err;
-          const msg = String(err && err.message || "");
+          const msg = String((err && err.message) || "");
           if (/No endpoint matching/i.test(msg)) {
             throw new Error(
-              `O Space não tem o endpoint "${endpoint}". Abra os Ajustes e escreva o nome correto no campo "Endpoint da API do Space" — a lista está em https://SPACE.hf.space/?view=api`
+              `O Space não tem o endpoint "${endpoint}". Abra os Ajustes e escreva o nome correto no campo "Endpoint da API do Space" — a lista está em ${urlViewApi()}`
             );
           }
         }
       }
-      throw ultimoErro || new Error("O Space recusou todos os formatos de argumentos conhecidos.");
+
+      throw new Error(explicarErroGradio(ultimoErro, endpoint, params));
+    }
+
+    function urlViewApi() {
+      const dominio = (state.hfSpace || "SPACE").replace(/[^a-z0-9-]/gi, "-").toLowerCase();
+      return `https://${dominio}.hf.space/?view=api`;
+    }
+
+    // Transforma o erro cru do Gradio em instruções concretas.
+    function explicarErroGradio(err, endpoint, params) {
+      const msg = String((err && err.message) || err || "");
+      const emFalta = msg.match(/No value provided for required parameter:\s*([^\s,]+)/i);
+      if (emFalta) {
+        const lista = params.length
+          ? params.map(p => `"${nomeParam(p)}"${temDefault(p) ? "" : " (obrigatório)"}`).join(", ")
+          : "(não foi possível ler a lista)";
+        return `O Space exige o parâmetro "${emFalta[1]}" e a app não o soube preencher.\n` +
+               `Endpoint usado: ${endpoint}\n` +
+               `Parâmetros declarados: ${lista}\n` +
+               `Confirme o endpoint nos Ajustes e veja a assinatura em ${urlViewApi()}`;
+      }
+      if (/quota|exceeded|zerogpu/i.test(msg)) {
+        return "A quota diária de GPU do Space esgotou-se. Cole o token do Hugging Face nos Ajustes para ter mais quota.";
+      }
+      if (/sleep|sleeping|building|starting|not running/i.test(msg)) {
+        return `O Space "${state.hfSpace}" está adormecido ou a arrancar. Abra-o no browser uma vez e tente daqui a um minuto.`;
+      }
+      if (/401|403|unauthor|private/i.test(msg)) {
+        return "O Space é privado ou o token foi recusado. Confirme o token nos Ajustes.";
+      }
+      if (/404|not found|could not (get|find)/i.test(msg)) {
+        return `Não encontrei o Space "${state.hfSpace}". Formato correto: utilizador/nome-do-space.`;
+      }
+      return msg.slice(0, 300) || "O Space recusou todos os formatos de argumentos conhecidos.";
+    }
+
+    // Diagnóstico: mostra o endpoint detetado e os nomes reais dos parâmetros.
+    async function testarLigacaoSpace() {
+      const space = settingHfSpaceId.value.trim();
+      if (!space) {
+        showToast("Escreva primeiro o nome do Space.", "error");
+        return;
+      }
+      testSpaceBtn.disabled = true;
+      testSpaceOut.classList.remove("hidden");
+      testSpaceOut.textContent = "A ligar ao Space...";
+      try {
+        const Client = await carregarClienteGradio();
+        const opcoes = {};
+        const token = settingHfToken.value.trim();
+        if (token) opcoes.hf_token = token;
+        const cliente = await Client.connect(space, opcoes);
+        const api = await cliente.view_api();
+        const nomeados = api.named_endpoints || {};
+        const uteis = Object.keys(nomeados).filter(n => !ENDPOINT_INTERNO.test(n));
+        const escolhido = settingHfEndpoint.value.trim()
+          ? (settingHfEndpoint.value.trim().startsWith("/") ? settingHfEndpoint.value.trim() : "/" + settingHfEndpoint.value.trim())
+          : (["/chat", "/responder", "/conversar", "/predict", "/respond", "/run"].find(n => uteis.includes(n)) || uteis[0] || "—");
+        const params = ((nomeados[escolhido] || {}).parameters) || [];
+        const linhas = [
+          `Endpoints: ${uteis.length ? uteis.join(", ") : "nenhum"}`,
+          `A usar: ${escolhido}`,
+          `Parâmetros: ${params.length ? params.map(p => `${nomeParam(p)}:${tipoParam(p) || "?"}${temDefault(p) ? "" : "*"}`).join(", ") : "nenhum"}`,
+          `(* = obrigatório)`
+        ];
+        testSpaceOut.textContent = linhas.join("\n");
+      } catch (err) {
+        testSpaceOut.textContent = "Falhou: " + explicarErroGradio(err, "—", []);
+      } finally {
+        testSpaceBtn.disabled = false;
+      }
     }
 
     // A resposta pode vir como texto, par [utilizador, bot], histórico completo ou objeto
@@ -753,12 +990,28 @@
       return "Sem resposta do Space.";
     }
 
+    // Escape para conteúdo e para atributos (as aspas partiam o HTML das imagens)
+    function escapeHtml(valor) {
+      return String(valor ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
+    // Só deixa passar esquemas seguros num src/href
+    function urlSegura(valor) {
+      const u = String(valor ?? "").trim();
+      return /^(https?:|data:image\/|blob:)/i.test(u) ? escapeHtml(u) : "";
+    }
+
     function appendMessage(role, text) {
       const isUser = role === "user";
       const div = document.createElement("div");
       div.className = `flex gap-3 text-xs sm:text-sm ${isUser ? "justify-end" : "justify-start"} animate-fade-in`;
 
-      const safeText = (text || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const safeText = escapeHtml(text || "");
       const formatted = safeText
         .replace(/`([^`]+)`/g, '<code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">$1</code>')
         .replace(/\n/g, "<br>")
@@ -920,18 +1173,24 @@
     function appendImageMessage(url, descricao) {
       const div = document.createElement("div");
       div.className = "flex gap-3 text-xs sm:text-sm justify-start animate-fade-in";
-      const legenda = descricao.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const legenda = escapeHtml(descricao);
+      const src = urlSegura(url);
       const ficheiro = "imagem-" + Date.now() + ".png";
+
+      if (!src) {
+        appendMessage("assistant", "⚠️ O Space devolveu um endereço de imagem inválido.");
+        return;
+      }
 
       div.innerHTML = `
         <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md">
           <i class="fa-solid fa-image text-xs"></i>
         </div>
         <div class="max-w-[80%] bg-slate-900 border border-slate-800 rounded-2xl rounded-bl-sm shadow-md overflow-hidden">
-          <img src="${url}" alt="${legenda}" class="w-full block bg-slate-950" loading="lazy">
+          <img src="${src}" alt="${legenda}" class="w-full block bg-slate-950" loading="lazy">
           <div class="px-3 py-2 flex items-start justify-between gap-3">
             <span class="text-[11px] text-slate-400 leading-snug">${legenda}</span>
-            <a href="${url}" download="${ficheiro}" class="text-brand-400 hover:text-brand-300 shrink-0 p-1" title="Guardar imagem">
+            <a href="${src}" download="${ficheiro}" class="text-brand-400 hover:text-brand-300 shrink-0 p-1" title="Guardar imagem">
               <i class="fa-solid fa-download text-xs"></i>
             </a>
           </div>
@@ -949,7 +1208,7 @@
           <i class="fa-solid fa-robot text-xs"></i>
         </div>
         <div class="bg-slate-900 text-slate-400 border border-slate-800 px-4 py-3 rounded-2xl rounded-bl-sm shadow-md flex items-center gap-2">
-          <span>${state.botName} ${etiqueta || "a pensar"}</span>
+          <span>${escapeHtml(state.botName)} ${escapeHtml(etiqueta || "a pensar")}</span>
           <div class="flex gap-1 items-center ml-1">
             <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
             <span class="w-1.5 h-1.5 bg-brand-400 rounded-full typing-dot"></span>
@@ -1011,14 +1270,14 @@
       userInput.addEventListener("keydown", (e) => {
         if (e.key === "Enter" && !e.shiftKey) {
           e.preventDefault();
-          chatForm.dispatchEvent(new Event("submit"));
+          sendMessage(userInput.value);
         }
       });
 
       document.querySelectorAll(".suggestion-btn").forEach(btn => {
         btn.addEventListener("click", () => {
           userInput.value = btn.querySelector("span").textContent;
-          chatForm.dispatchEvent(new Event("submit"));
+          sendMessage(userInput.value);
         });
       });
 
@@ -1034,6 +1293,15 @@
       openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
       closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
       settingProvider.addEventListener("change", updateProviderFieldsVisibility);
+      testSpaceBtn.addEventListener("click", testarLigacaoSpace);
+
+      // Fechar os Ajustes com Escape ou clique fora
+      settingsModal.addEventListener("click", (e) => {
+        if (e.target === settingsModal) settingsModal.classList.add("hidden");
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") settingsModal.classList.add("hidden");
+      });
 
       presetPersonaFragoso.addEventListener("click", () => {
         settingSystemPrompt.value = DEFAULT_FRAGOSO_PROMPT;
@@ -1059,7 +1327,8 @@
         state.speechLang = settingSpeechLang.value;
         state.speechRate = parseFloat(settingSpeechRate.value);
         state.gradioClient = null;
-        
+        apiChatCache = null;
+
         // Atualizar idioma do reconhecimento de voz
         if (recognition) {
           recognition.lang = state.speechLang;
@@ -1086,7 +1355,12 @@
       });
     }
 
-    window.addEventListener("DOMContentLoaded", init);
+    // Módulos correm com `defer`, mas se o DOM já estiver pronto o evento não volta a disparar.
+    if (document.readyState === "loading") {
+      window.addEventListener("DOMContentLoaded", init);
+    } else {
+      init();
+    }
   </script>
 
   <!-- Registo do Service Worker, instalação e estado da rede -->

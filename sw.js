@@ -8,14 +8,19 @@
  * Ao alterar ficheiros, incrementar VERSION para forçar a atualização.
  */
 
-const VERSION = "v6";
+const VERSION = "v7";
 const SHELL_CACHE = `fragoso-bot-shell-${VERSION}`;
 const CDN_CACHE = `fragoso-bot-cdn-${VERSION}`;
 
-const SHELL_ASSETS = [
+// Essenciais: se algum falhar, a instalação falha (e deve mesmo falhar).
+const SHELL_CORE = [
   "./",
   "./index.html",
-  "./manifest.webmanifest",
+  "./manifest.webmanifest"
+];
+
+// Opcionais: ícones. Se ainda não existirem, não podem abortar a instalação.
+const SHELL_OPTIONAL = [
   "./icons/icon-192.png",
   "./icons/icon-512.png",
   "./icons/maskable-192.png",
@@ -33,11 +38,20 @@ const CDN_HOSTS = [
 ];
 
 // --- Instalação: precarrega o app shell ---
+// cache.addAll() é atómico: um único 404 (ex.: um ícone em falta) rejeita tudo
+// e o Service Worker nunca chega a instalar. Por isso os ícones vão um a um.
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(SHELL_CACHE)
-      .then((cache) => cache.addAll(SHELL_ASSETS))
-      .then(() => self.skipWaiting())
+    (async () => {
+      const cache = await caches.open(SHELL_CACHE);
+      await cache.addAll(SHELL_CORE);
+      await Promise.all(
+        SHELL_OPTIONAL.map((url) =>
+          cache.add(url).catch(() => console.warn("[sw] recurso opcional em falta:", url))
+        )
+      );
+      await self.skipWaiting();
+    })()
   );
 });
 
