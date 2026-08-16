@@ -93,6 +93,35 @@ Se o seletor disser *"nenhuma voz para xx-XX"*, o sistema operativo não tem ess
 
 O idioma também é aplicado ao reconhecimento de voz (microfone).
 
+## Modo conversa (mãos livres)
+
+Três formas de entrar: o botão **Conversa** no cabeçalho, o botão grande no ecrã de boas-vindas, ou o auricular ao lado do microfone.
+
+Abre um ecrã dedicado com **visualizador de áudio em tempo real** — as barras reagem ao nível do microfone através da Web Audio API (`AnalyserNode`), não é animação decorativa. As cores seguem o estado: verde a ouvir, âmbar a pensar, azul a responder. Uma linha na base mostra o avanço da pausa, ou seja, quanto falta para a frase ser enviada.
+
+Enquanto o bot fala o microfone está fechado, por isso nesse período a onda é sintética — não há áudio de entrada para medir.
+
+Depois de iniciado não é preciso carregar em mais nada:
+
+1. A app ouve em contínuo e mostra em tempo real o que vai transcrevendo.
+2. Ao detetar **1,5 s de silêncio** conclui que a frase acabou e envia.
+3. Enquanto o bot fala, o microfone fecha — evita que ele se ouça a si próprio e entre em ciclo.
+4. Assim que se cala, o microfone reabre sozinho.
+5. Dizer **"até amanhã"** (ou "adeus") termina a conversa e o bot despede-se.
+
+O ecrã mostra a transcrição em direto enquanto fala, o que foi efetivamente captado quando envia, e um resumo da resposta do bot.
+
+O visualizador usa um segundo acesso ao microfone, independente do reconhecimento de voz. Se esse acesso for recusado, o modo conversa continua a funcionar — apenas a onda passa a aproximada, com aviso no ecrã.
+
+Nos **Ajustes → Controles de Voz**:
+
+- **Pausa que conclui a frase** — 0,6 s a 4 s. Subir se costumar fazer pausas a pensar a meio da frase.
+- **Frases que terminam a conversa** — lista separada por vírgulas. Acentos, maiúsculas e pequenos erros de transcrição são tolerados (*"atá amamhã"* também termina).
+
+O modo conversa liga a leitura das respostas enquanto está ativo, sem alterar a preferência guardada. Requer Chrome ou Edge, e HTTPS (ou `localhost`) para aceder ao microfone.
+
+**Auscultadores são recomendados.** Com o altifalante do portátil, o microfone só reabre depois de o bot terminar — por isso não há eco, mas também não é possível interrompê-lo a meio.
+
 ## Modelos de voz (fase 2)
 
 `models/` e os ficheiros `*.pth` / `*.index` estão no `.gitignore` — **não vão para o GitHub**. É intencional:

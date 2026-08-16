@@ -81,8 +81,17 @@
       to   { opacity: 1; transform: translateY(0); }
     }
 
+    /* Pulsação do indicador do modo conversa */
+    .pulso {
+      animation: pulso 1.6s ease-in-out infinite;
+    }
+    @keyframes pulso {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50%      { transform: scale(1.7); opacity: 0.35; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
-      .animate-fade-in, .typing-dot { animation: none; }
+      .animate-fade-in, .typing-dot, .pulso { animation: none; }
     }
   </style>
 </head>
@@ -115,6 +124,10 @@
           <i class="fa-solid fa-download text-sm"></i>
           <span class="hidden sm:inline">Instalar</span>
         </button>
+        <button id="conversa-abrir-btn" title="Modo conversa (mãos livres)" class="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-brand-600/15 hover:bg-brand-600/30 text-brand-300 hover:text-brand-200 transition-all text-xs font-medium flex items-center gap-1.5 border border-brand-500/30">
+          <i class="fa-solid fa-headset text-sm"></i>
+          <span class="hidden sm:inline">Conversa</span>
+        </button>
         <button id="open-settings-btn" class="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all text-xs font-medium flex items-center gap-1.5 border border-slate-700/60">
           <i class="fa-solid fa-gear text-sm text-slate-400"></i>
           <span class="hidden sm:inline">Ajustes</span>
@@ -131,6 +144,36 @@
       <span>Sem rede. O modo demo local continua a funcionar; as ligações ao Space e à API ficam indisponíveis.</span>
     </div>
 
+    <!-- Ecrã dedicado do modo conversa -->
+    <div id="conversa-overlay" class="hidden absolute inset-0 z-40 bg-slate-950/96 backdrop-blur-md flex-col items-center justify-center p-6 text-center">
+
+      <div class="flex items-center gap-2 mb-1">
+        <span class="relative flex h-2.5 w-2.5">
+          <span id="conversa-pulse" class="absolute inline-flex h-full w-full rounded-full bg-emerald-400 pulso"></span>
+          <span id="conversa-dot" class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+        </span>
+        <span id="conversa-estado" class="text-sm sm:text-base font-semibold text-slate-100">A ouvir…</span>
+      </div>
+      <p class="text-[11px] text-slate-500 mb-6 tracking-wide uppercase">Modo conversa · mãos livres</p>
+
+      <canvas id="conversa-canvas" class="w-full max-w-md h-28 sm:h-36 mb-1"></canvas>
+      <p id="conversa-aviso-mic" class="hidden text-[11px] text-amber-400 mb-2"></p>
+
+      <div class="w-full max-w-md min-h-[4.5rem] flex flex-col justify-start mt-4">
+        <p id="conversa-parcial" class="text-sm sm:text-base text-slate-100 leading-relaxed break-words"></p>
+        <p id="conversa-resposta" class="text-xs text-slate-500 mt-2 leading-relaxed break-words"></p>
+      </div>
+
+      <div class="mt-8 flex flex-col items-center gap-3">
+        <button type="button" id="conversa-sair-btn" class="px-5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 text-sm font-medium transition-colors flex items-center gap-2">
+          <i class="fa-solid fa-stop text-xs"></i>
+          <span>Terminar</span>
+        </button>
+        <span class="text-[11px] text-slate-500">ou diga <strong id="conversa-frase" class="text-brand-300">"até amanhã"</strong></span>
+      </div>
+
+    </div>
+
     <main id="messages-container" class="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 bg-slate-950/50">
       
       <!-- Cartão de Boas-Vindas -->
@@ -142,6 +185,12 @@
         <p class="text-xs sm:text-sm text-slate-400 mb-6 leading-relaxed">
           Pode enviar mensagens no modo local de simulação, ou ligar diretamente a um <strong class="text-slate-200">Hugging Face Space</strong> ou <strong class="text-slate-200">FastAPI</strong> nos <strong class="text-slate-200">Ajustes</strong>.
         </p>
+
+        <button type="button" id="conversa-cta-btn" class="w-full mb-3 px-4 py-3 rounded-xl bg-gradient-to-r from-brand-600 to-indigo-500 hover:from-brand-500 hover:to-indigo-400 text-white text-sm font-medium transition-all shadow-lg shadow-brand-600/25 flex items-center justify-center gap-2">
+          <i class="fa-solid fa-headset"></i>
+          <span>Iniciar conversa por voz</span>
+        </button>
+        <p class="text-[11px] text-slate-500 mb-4">Fala livremente, sem carregar em botões. Diga <strong class="text-slate-400">"até amanhã"</strong> para terminar.</p>
 
         <div class="flex flex-col gap-2 text-xs">
           <button class="suggestion-btn text-left bg-slate-900 hover:bg-brand-600/20 hover:border-brand-500/40 border border-slate-800 text-slate-300 hover:text-brand-300 p-3 rounded-xl transition-all flex items-center gap-2">
@@ -167,6 +216,14 @@
             class="w-full bg-transparent px-3 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-32"
           ></textarea>
         </div>
+        <button
+          type="button"
+          id="conversa-btn"
+          title="Modo conversa (mãos livres)"
+          class="h-11 w-11 rounded-xl bg-slate-800 hover:bg-slate-700 text-brand-300 flex items-center justify-center transition-all border border-slate-700 shrink-0"
+        >
+          <i class="fa-solid fa-headset text-sm"></i>
+        </button>
         <button
           type="button"
           id="mic-btn"
@@ -311,6 +368,24 @@
               <i class="fa-solid fa-play text-brand-400"></i>
               <span>Ouvir amostra</span>
             </button>
+
+            <div class="mt-4 pt-3 border-t border-slate-800">
+              <div class="flex items-center gap-2 mb-2">
+                <i class="fa-solid fa-headset text-brand-400"></i>
+                <span class="font-semibold text-slate-200">Modo conversa (mãos livres)</span>
+              </div>
+
+              <label class="block text-slate-300 mb-1">Pausa que conclui a frase</label>
+              <div class="flex items-center gap-2">
+                <input type="range" id="setting-conversa-pausa" min="0.6" max="4" step="0.1" value="1.5" class="flex-1">
+                <span id="conversa-pausa-display" class="text-slate-400 text-sm">1.5s</span>
+              </div>
+              <p class="text-[11px] text-slate-400 mt-1">Tempo de silêncio até a app decidir que acabou de falar e enviar.</p>
+
+              <label class="block text-slate-300 mb-1 mt-3">Frases que terminam a conversa</label>
+              <input type="text" id="setting-frase-fim" placeholder="até amanhã, adeus" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 text-xs">
+              <p class="text-[11px] text-slate-400 mt-1">Separadas por vírgulas. Acentos e pequenos erros de transcrição são tolerados.</p>
+            </div>
           </div>
 
           <!-- Nome Personalizado do Robô -->
@@ -384,6 +459,8 @@
       textToSpeech: localStorage.getItem("chat_text_to_speech") === "true",
       speechLang: localStorage.getItem("chat_speech_lang") || "pt-PT",
       speechVoice: localStorage.getItem("chat_speech_voice") || "",
+      conversaPausa: parseFloat(localStorage.getItem("chat_conversa_pausa") || "1.5"),
+      fraseFim: localStorage.getItem("chat_frase_fim") || "até amanhã, adeus",
       speechRate: parseFloat(localStorage.getItem("chat_speech_rate") || "1.0"),
       isListening: false
     };
@@ -432,6 +509,22 @@
     const settingSpeechVoice = document.getElementById("setting-speech-voice");
     const speechVoiceHint = document.getElementById("speech-voice-hint");
     const testVoiceBtn = document.getElementById("test-voice-btn");
+    const conversaBtn = document.getElementById("conversa-btn");
+    const conversaAbrirBtn = document.getElementById("conversa-abrir-btn");
+    const conversaCtaBtn = document.getElementById("conversa-cta-btn");
+    const conversaOverlay = document.getElementById("conversa-overlay");
+    const conversaCanvas = document.getElementById("conversa-canvas");
+    const conversaResposta = document.getElementById("conversa-resposta");
+    const conversaAvisoMic = document.getElementById("conversa-aviso-mic");
+    const conversaEstado = document.getElementById("conversa-estado");
+    const conversaParcial = document.getElementById("conversa-parcial");
+    const conversaPulse = document.getElementById("conversa-pulse");
+    const conversaDot = document.getElementById("conversa-dot");
+    const conversaFrase = document.getElementById("conversa-frase");
+    const conversaSairBtn = document.getElementById("conversa-sair-btn");
+    const settingConversaPausa = document.getElementById("setting-conversa-pausa");
+    const conversaPausaDisplay = document.getElementById("conversa-pausa-display");
+    const settingFraseFim = document.getElementById("setting-frase-fim");
 
     function init() {
       settingProvider.value = state.provider;
@@ -448,6 +541,10 @@
       settingSpeechLang.value = state.speechLang;
       settingSpeechRate.value = state.speechRate;
       speechRateDisplay.textContent = state.speechRate.toFixed(1) + "x";
+      settingConversaPausa.value = state.conversaPausa;
+      conversaPausaDisplay.textContent = state.conversaPausa.toFixed(1) + "s";
+      settingFraseFim.value = state.fraseFim;
+      atualizarDicaFraseFim();
       appTitleDisplay.textContent = state.botName;
 
       updateProviderFieldsVisibility();
@@ -485,18 +582,24 @@
       
       if (!recognition) {
         recognition = new SpeechRecognition();
-        recognition.continuous = false;
-        recognition.interimResults = false;
         recognition.lang = state.speechLang;
-        
+
         recognition.onstart = () => {
           state.isListening = true;
+          if (conversa.ativa) {
+            definirEstadoConversa("ouvir");
+            return;
+          }
           micBtn.classList.add("bg-red-500/20", "border-red-500", "text-red-400");
           micBtn.classList.remove("bg-slate-800", "hover:bg-slate-700", "text-brand-300");
           micBtn.title = "Escuta ativa... clique para cancelar";
         };
-        
+
         recognition.onresult = (event) => {
+          if (conversa.ativa) {
+            tratarResultadoConversa(event);
+            return;
+          }
           let transcript = "";
           for (let i = event.resultIndex; i < event.results.length; i++) {
             transcript += event.results[i][0].transcript;
@@ -508,12 +611,25 @@
             updateMicButtonStyle();
           }
         };
-        
+
         recognition.onerror = (event) => {
           state.isListening = false;
+
+          if (conversa.ativa) {
+            // Em escuta contínua estes erros são rotina: o silêncio dispara-os.
+            if (event.error === "no-speech" || event.error === "aborted") return;
+            if (event.error === "network") {
+              definirEstadoConversa("erro", "Sem rede para o reconhecimento");
+              return;
+            }
+            // Permissão/microfone: não vale a pena insistir.
+            sairModoConversa(`Microfone indisponível (${event.error}).`, true);
+            return;
+          }
+
           updateMicButtonStyle();
           const errorMessages = {
-            "network": "Erro de rede. Verifique sua conexão.",
+            "network": "Erro de rede. Verifique a sua ligação.",
             "no-speech": "Nenhuma fala detetada. Tente novamente.",
             "audio-capture": "Microfone não encontrado ou sem permissão.",
             "not-allowed": "Permissão de microfone negada."
@@ -521,12 +637,446 @@
           const msg = errorMessages[event.error] || `Erro no reconhecimento: ${event.error}`;
           showToast(msg, "error");
         };
-        
+
         recognition.onend = () => {
           state.isListening = false;
+          if (conversa.ativa) {
+            // O Chrome termina a sessão sozinho ao fim de algum tempo — reabrir.
+            if (!conversa.paradoDeProposito) reabrirEscuta();
+            return;
+          }
           updateMicButtonStyle();
         };
       }
+    }
+
+    // ===== MODO CONVERSA (mãos livres) =====
+    // Escuta contínua; a frase é enviada após uma pausa de silêncio.
+    // O microfone fecha enquanto o bot fala, para não se ouvir a si próprio.
+
+    const conversa = {
+      ativa: false,
+      buffer: "",
+      timerSilencio: null,
+      paradoDeProposito: false,
+      ultimaReabertura: 0,
+      timerReabertura: null
+    };
+
+    // ===== VISUALIZADOR DE ÁUDIO =====
+    // Lê o microfone com a Web Audio API e desenha o nível real em tempo real.
+    // Enquanto o bot fala o microfone está fechado, por isso a onda é sintética.
+
+    const audio = {
+      ctx: null, analisador: null, stream: null, fonte: null,
+      dados: null, raf: null, fase: 0, nivelSuave: 0
+    };
+
+    const CORES_ONDA = {
+      ouvir: ["#34d399", "#10b981"],
+      pensar: ["#fbbf24", "#f59e0b"],
+      falar: ["#818cf8", "#6366f1"],
+      pausa: ["#64748b", "#475569"],
+      erro: ["#f87171", "#ef4444"]
+    };
+
+    const N_BARRAS = 40;
+    let estadoAtualConversa = "pausa";
+
+    async function iniciarVisualizador() {
+      conversaAvisoMic.classList.add("hidden");
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
+      try {
+        audio.stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+        });
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return false;
+        audio.ctx = new Ctx();
+        if (audio.ctx.state === "suspended") await audio.ctx.resume();
+        audio.fonte = audio.ctx.createMediaStreamSource(audio.stream);
+        audio.analisador = audio.ctx.createAnalyser();
+        audio.analisador.fftSize = 512;
+        audio.analisador.smoothingTimeConstant = 0.72;
+        audio.fonte.connect(audio.analisador);
+        audio.dados = new Uint8Array(audio.analisador.frequencyBinCount);
+        return true;
+      } catch (err) {
+        // Sem permissão para o stream de análise: a onda passa a sintética.
+        conversaAvisoMic.textContent = "Sem acesso ao nível do microfone — a animação é aproximada.";
+        conversaAvisoMic.classList.remove("hidden");
+        return false;
+      }
+    }
+
+    function pararVisualizador() {
+      if (audio.raf) cancelAnimationFrame(audio.raf);
+      audio.raf = null;
+      if (audio.stream) audio.stream.getTracks().forEach(t => t.stop());
+      if (audio.ctx && audio.ctx.state !== "closed") audio.ctx.close().catch(() => {});
+      audio.stream = null; audio.ctx = null; audio.analisador = null;
+      audio.fonte = null; audio.dados = null; audio.nivelSuave = 0;
+    }
+
+    function ajustarCanvas() {
+      const dpr = window.devicePixelRatio || 1;
+      const r = conversaCanvas.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      conversaCanvas.width = Math.round(r.width * dpr);
+      conversaCanvas.height = Math.round(r.height * dpr);
+      const ctx = conversaCanvas.getContext("2d");
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return { ctx, largura: r.width, altura: r.height };
+    }
+
+    function desenharOnda() {
+      if (!conversa.ativa) return;
+      audio.raf = requestAnimationFrame(desenharOnda);
+
+      const alvo = ajustarCanvas();
+      if (!alvo) return;
+      const { ctx, largura, altura } = alvo;
+      const meio = altura / 2;
+      ctx.clearRect(0, 0, largura, altura);
+
+      const [c1, c2] = CORES_ONDA[estadoAtualConversa] || CORES_ONDA.pausa;
+      const grad = ctx.createLinearGradient(0, 0, largura, 0);
+      grad.addColorStop(0, c1);
+      grad.addColorStop(1, c2);
+      ctx.fillStyle = grad;
+
+      const aOuvir = estadoAtualConversa === "ouvir";
+      let alturas;
+
+      if (aOuvir && audio.analisador) {
+        // Nível real. O espectro decai muito nos agudos, por isso é compensado
+        // e depois espelhado ao centro — lê-se melhor como "voz" do que como gráfico.
+        audio.analisador.getByteFrequencyData(audio.dados);
+        const metade = Math.floor(N_BARRAS / 2);
+        const uteis = Math.floor(audio.dados.length * 0.62); // acima disto não há energia de voz
+        const porBarra = Math.max(1, Math.floor(uteis / metade));
+        const meiaOnda = [];
+        let soma = 0;
+        for (let i = 0; i < metade; i++) {
+          let acc = 0;
+          for (let j = 0; j < porBarra; j++) acc += audio.dados[i * porBarra + j] || 0;
+          const bruto = (acc / porBarra) / 255;
+          // Compensação: sem isto só as barras graves se mexem.
+          const v = Math.min(1, bruto * (1 + (i / metade) * 1.6));
+          soma += v;
+          meiaOnda.push(v);
+        }
+        audio.nivelSuave = audio.nivelSuave * 0.8 + (soma / metade) * 0.2;
+        alturas = meiaOnda.slice().reverse().concat(meiaOnda);
+      } else {
+        // Onda sintética: respiração lenta em espera, mais viva quando o bot fala.
+        audio.fase += estadoAtualConversa === "falar" ? 0.16 : 0.05;
+        const amplitude = estadoAtualConversa === "falar" ? 0.55
+                        : estadoAtualConversa === "pensar" ? 0.22 : 0.12;
+        alturas = [];
+        for (let i = 0; i < N_BARRAS; i++) {
+          const t = i / N_BARRAS;
+          const envelope = Math.sin(Math.PI * t);
+          const onda = Math.sin(audio.fase + t * 7) * 0.5
+                     + Math.sin(audio.fase * 1.7 + t * 13) * 0.3
+                     + Math.sin(audio.fase * 0.6 + t * 3) * 0.2;
+          alturas.push(Math.abs(onda) * envelope * amplitude);
+        }
+      }
+
+      const largBarra = largura / N_BARRAS;
+      const espessura = Math.max(2, largBarra * 0.45);
+      const raio = espessura / 2;
+      const maxAltura = meio - 4;
+
+      for (let i = 0; i < N_BARRAS; i++) {
+        const h = Math.max(espessura, Math.min(1, alturas[i] * 1.6) * maxAltura * 2);
+        const x = i * largBarra + (largBarra - espessura) / 2;
+        const y = meio - h / 2;
+        ctx.globalAlpha = aOuvir ? 0.55 + Math.min(0.45, alturas[i] * 2) : 0.75;
+        if (ctx.roundRect) {
+          ctx.beginPath();
+          ctx.roundRect(x, y, espessura, h, raio);
+          ctx.fill();
+        } else {
+          ctx.fillRect(x, y, espessura, h);
+        }
+      }
+      ctx.globalAlpha = 1;
+
+      // Linha de progresso do silêncio: mostra quando a frase vai ser enviada.
+      if (aOuvir && conversa.buffer && conversa.ultimoSom) {
+        const decorrido = Date.now() - conversa.ultimoSom;
+        const total = Math.max(1, state.conversaPausa * 1000);
+        const fracao = Math.min(1, decorrido / total);
+        ctx.fillStyle = "#334155";
+        ctx.fillRect(0, altura - 3, largura, 2);
+        ctx.fillStyle = c1;
+        ctx.fillRect(0, altura - 3, largura * fracao, 2);
+      }
+    }
+
+    const ESTADOS_CONVERSA = {
+      ouvir: { texto: "A ouvir…", cor: "bg-emerald-400", pulsar: true },
+      pensar: { texto: "A pensar…", cor: "bg-amber-400", pulsar: false },
+      falar: { texto: "A responder…", cor: "bg-brand-400", pulsar: true },
+      pausa: { texto: "Um momento…", cor: "bg-slate-400", pulsar: false },
+      erro: { texto: "Problema no microfone", cor: "bg-red-400", pulsar: false }
+    };
+
+    function definirEstadoConversa(chave, textoAlternativo) {
+      const e = ESTADOS_CONVERSA[chave] || ESTADOS_CONVERSA.pausa;
+      estadoAtualConversa = ESTADOS_CONVERSA[chave] ? chave : "pausa";
+      conversaEstado.textContent = textoAlternativo || e.texto;
+      conversaDot.className = `relative inline-flex rounded-full h-2.5 w-2.5 ${e.cor}`;
+      conversaPulse.className = `absolute inline-flex h-full w-full rounded-full ${e.cor}${e.pulsar ? " pulso" : ""}`;
+      if (chave !== "ouvir") conversaParcial.textContent = "";
+    }
+
+    // Compara ignorando acentuação, pontuação e maiúsculas.
+    function normalizarFrase(valor) {
+      return String(valor || "")
+        .toLowerCase()
+        .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+
+    // Distância de edição, para tolerar erros de transcrição ("ate amanha" vs "ata amamha").
+    function distancia(a, b) {
+      if (a === b) return 0;
+      const m = a.length, n = b.length;
+      if (!m) return n;
+      if (!n) return m;
+      let anterior = Array.from({ length: n + 1 }, (_, i) => i);
+      for (let i = 1; i <= m; i++) {
+        const atual = [i];
+        for (let j = 1; j <= n; j++) {
+          atual[j] = Math.min(
+            anterior[j] + 1,
+            atual[j - 1] + 1,
+            anterior[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+          );
+        }
+        anterior = atual;
+      }
+      return anterior[n];
+    }
+
+    function ehFraseDeFim(texto) {
+      const dito = normalizarFrase(texto);
+      if (!dito) return false;
+      const palavras = dito.split(" ");
+      const frases = String(state.fraseFim || "")
+        .split(",")
+        .map(normalizarFrase)
+        .filter(Boolean);
+
+      for (const frase of frases) {
+        const tolerancia = Math.max(1, Math.round(frase.length / 5));
+        if (distancia(dito, frase) <= tolerancia) return true;
+        const n = frase.split(" ").length;
+        const cauda = palavras.slice(-n).join(" ");
+        const cabeca = palavras.slice(0, n).join(" ");
+        if (distancia(cauda, frase) <= tolerancia) return true;
+        if (distancia(cabeca, frase) <= tolerancia) return true;
+      }
+      return false;
+    }
+
+    function atualizarDicaFraseFim() {
+      const primeira = String(settingFraseFim.value || state.fraseFim).split(",")[0].trim();
+      conversaFrase.textContent = `"${primeira || "até amanhã"}"`;
+    }
+
+    function tratarResultadoConversa(event) {
+      let finais = "";
+      let parcial = "";
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const r = event.results[i];
+        if (r.isFinal) finais += r[0].transcript;
+        else parcial += r[0].transcript;
+      }
+
+      if (finais.trim()) conversa.buffer = (conversa.buffer + " " + finais).trim();
+      conversaParcial.textContent = (conversa.buffer + " " + parcial).trim().slice(-160);
+
+      // Qualquer som reinicia a contagem do silêncio.
+      conversa.ultimoSom = Date.now();
+      clearTimeout(conversa.timerSilencio);
+      conversa.timerSilencio = setTimeout(aoFimDoSilencio, Math.round(state.conversaPausa * 1000));
+    }
+
+    function aoFimDoSilencio() {
+      if (!conversa.ativa) return;
+      const texto = conversa.buffer.trim();
+      conversa.buffer = "";
+      conversaParcial.textContent = "";
+      if (!texto) return;
+
+      if (ehFraseDeFim(texto)) {
+        despedir(texto);
+        return;
+      }
+
+      // Fecha o microfone antes de responder para o bot não se ouvir.
+      pararEscuta();
+      definirEstadoConversa("pensar");
+      // Mostra o que foi efetivamente captado, para o utilizador confirmar.
+      conversaParcial.textContent = texto;
+      conversaResposta.textContent = "";
+      sendMessage(texto);
+    }
+
+    function pararEscuta() {
+      conversa.paradoDeProposito = true;
+      clearTimeout(conversa.timerSilencio);
+      clearTimeout(conversa.timerReabertura);
+      if (recognition) {
+        try { recognition.stop(); } catch (_) {}
+      }
+    }
+
+    function iniciarEscuta() {
+      if (!conversa.ativa) return;
+      if (speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) {
+        retomarEscutaQuandoCalar();
+        return;
+      }
+      initSpeechRecognition();
+      if (!recognition) return;
+      conversa.paradoDeProposito = false;
+      conversa.buffer = "";
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = state.speechLang;
+      try {
+        recognition.start();
+        definirEstadoConversa("ouvir");
+      } catch (err) {
+        // InvalidStateError = já estava a ouvir; qualquer outra coisa é real.
+        if (!/InvalidState/i.test(String(err && err.name))) {
+          sairModoConversa("Não consegui abrir o microfone: " + err.message, true);
+        }
+      }
+    }
+
+    // O reconhecimento termina sozinho periodicamente; reabrir sem entrar em ciclo.
+    function reabrirEscuta() {
+      if (!conversa.ativa) return;
+      clearTimeout(conversa.timerReabertura);
+      const desdeUltima = Date.now() - conversa.ultimaReabertura;
+      const espera = desdeUltima < 1000 ? 800 : 200;
+      conversa.ultimaReabertura = Date.now();
+      conversa.timerReabertura = setTimeout(iniciarEscuta, espera);
+    }
+
+    // Espera o fim da síntese de voz antes de reabrir o microfone.
+    function retomarEscutaQuandoCalar() {
+      if (!conversa.ativa) return;
+      definirEstadoConversa("falar");
+      let tentativas = 0;
+      const verificar = () => {
+        if (!conversa.ativa) return;
+        const ocupado = speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending);
+        if (ocupado && tentativas++ < 900) {
+          setTimeout(verificar, 200);
+          return;
+        }
+        iniciarEscuta();
+      };
+      // speakText adia o speak() em ~120 ms; dar margem antes de testar.
+      setTimeout(verificar, 300);
+    }
+
+    function despedir(textoDito) {
+      appendMessage("user", textoDito);
+      const adeus = state.speechLang.startsWith("en")
+        ? "See you tomorrow."
+        : state.speechLang.startsWith("es")
+          ? "Hasta mañana."
+          : "Até amanhã.";
+      appendMessage("assistant", adeus);
+      state.messages.push({ role: "user", content: textoDito });
+      state.messages.push({ role: "assistant", content: adeus });
+      updateMessageCounter();
+
+      // sairModoConversa repõe o TTS ao estado guardado; ler a intenção antes.
+      const deveFalar = state.textToSpeech;
+      sairModoConversa(null, false);
+      if (deveFalar) speakText(adeus);
+    }
+
+    function entrarModoConversa() {
+      if (!SpeechRecognition) {
+        showToast("Este browser não suporta reconhecimento de voz. Use o Chrome ou o Edge.", "error");
+        return;
+      }
+      if (!window.isSecureContext) {
+        showToast("O microfone exige HTTPS (ou localhost).", "error");
+        return;
+      }
+
+      conversa.ativa = true;
+      conversa.buffer = "";
+      conversa.ultimoSom = 0;
+      conversaParcial.textContent = "";
+      conversaResposta.textContent = "";
+      conversaOverlay.classList.remove("hidden");
+      conversaOverlay.classList.add("flex");
+      conversaBtn.classList.add("bg-brand-600", "text-white", "border-brand-500");
+      conversaBtn.classList.remove("bg-slate-800", "hover:bg-slate-700", "text-brand-300", "border-slate-700");
+      conversaBtn.title = "Terminar modo conversa";
+      micBtn.disabled = true;
+      micBtn.classList.add("opacity-40", "cursor-not-allowed");
+
+      if (welcomeCard && !welcomeCard.classList.contains("hidden")) {
+        welcomeCard.classList.add("hidden");
+      }
+
+      // O modo conversa implica falar as respostas, sem alterar a preferência guardada.
+      if (!state.textToSpeech) {
+        state.textToSpeech = true;
+        conversa.ttsForcado = true;
+      }
+
+      definirEstadoConversa("pausa", "A abrir o microfone…");
+      desenharOnda();
+
+      // O visualizador usa um stream próprio; se falhar, a onda fica sintética.
+      iniciarVisualizador().finally(() => {
+        carregarVozes().then(() => iniciarEscuta());
+      });
+    }
+
+    function sairModoConversa(mensagem, comoErro) {
+      if (!conversa.ativa) return;
+      conversa.ativa = false;
+      pararEscuta();
+      pararVisualizador();
+      conversa.buffer = "";
+
+      if (conversa.ttsForcado) {
+        state.textToSpeech = false;
+        conversa.ttsForcado = false;
+      }
+
+      conversaOverlay.classList.add("hidden");
+      conversaOverlay.classList.remove("flex");
+      conversaBtn.classList.remove("bg-brand-600", "text-white", "border-brand-500");
+      conversaBtn.classList.add("bg-slate-800", "hover:bg-slate-700", "text-brand-300", "border-slate-700");
+      conversaBtn.title = "Modo conversa (mãos livres)";
+      micBtn.disabled = false;
+      micBtn.classList.remove("opacity-40", "cursor-not-allowed");
+      updateMicButtonStyle();
+
+      if (mensagem) showToast(mensagem, comoErro ? "error" : "info");
+    }
+
+    function alternarModoConversa() {
+      if (conversa.ativa) sairModoConversa("Modo conversa terminado.", false);
+      else entrarModoConversa();
     }
 
     function updateMicButtonStyle() {
@@ -767,6 +1317,18 @@
         carregarVozes().then(() => ouvirAmostra());
       });
 
+      // --- Modo conversa ---
+      conversaBtn.addEventListener("click", alternarModoConversa);
+      conversaAbrirBtn.addEventListener("click", alternarModoConversa);
+      conversaCtaBtn.addEventListener("click", entrarModoConversa);
+      conversaSairBtn.addEventListener("click", () => sairModoConversa("Modo conversa terminado.", false));
+
+      settingConversaPausa.addEventListener("input", (e) => {
+        conversaPausaDisplay.textContent = (parseFloat(e.target.value) || 1.5).toFixed(1) + "s";
+      });
+
+      settingFraseFim.addEventListener("input", atualizarDicaFraseFim);
+
       // Vozes instaladas depois do arranque (ou motores lentos)
       if (speechSynthesis) {
         speechSynthesis.addEventListener("voiceschanged", () => {
@@ -781,20 +1343,31 @@
 
       // Parar a fala ao sair da página evita que continue a ler noutro separador
       window.addEventListener("pagehide", () => {
+        sairModoConversa(null, false);
         if (speechSynthesis) speechSynthesis.cancel();
       });
+
+      // Sem rede, o reconhecimento do Chrome deixa de funcionar
+      window.addEventListener("offline", () => {
+        if (conversa.ativa) sairModoConversa("Sem rede: o modo conversa parou.", true);
+      });
+    }
+
+    // Tira a marcação para não ler "asterisco asterisco" nem a mostrar no overlay
+    function semMarcacao(texto) {
+      return String(texto || "")
+        .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/<[^>]+>/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
     }
 
     // Função para falar a resposta do bot (chamada após receber resposta)
     function speakBotResponse(text) {
       if (state.textToSpeech && speechSynthesis && text.trim()) {
-        // Remove formatação markdown simples para não falar "**negrito**"
-        let cleanText = text
-          .replace(/\*\*(.*?)\*\*/g, "$1")
-          .replace(/`([^`]+)`/g, "$1")
-          .replace(/<[^>]+>/g, "");
-        
-        if (cleanText.trim().length > 0 && cleanText.length < 1000) {
+        const cleanText = semMarcacao(text);
+        if (cleanText.length > 0 && cleanText.length < 1000) {
           speakText(cleanText);
         }
       }
@@ -861,7 +1434,8 @@
         } finally {
           state.isLoading = false;
           sendBtn.disabled = false;
-          userInput.focus();
+          if (conversa.ativa) retomarEscutaQuandoCalar();
+          else userInput.focus();
         }
         return;
       }
@@ -939,6 +1513,7 @@
 
         typingEl.remove();
         appendMessage("assistant", botReply);
+        if (conversa.ativa) conversaResposta.textContent = semMarcacao(botReply).slice(0, 280);
         speakBotResponse(botReply);
 
         state.messages.push({ role: "user", content: userText });
@@ -948,10 +1523,13 @@
       } catch (err) {
         typingEl.remove();
         appendMessage("assistant", `⚠️ **Erro na conexão:** ${err.message}`);
+        if (conversa.ativa) conversaResposta.textContent = "⚠️ " + err.message.slice(0, 240);
         showToast(err.message, "error");
       } finally {
         state.isLoading = false;
         sendBtn.disabled = false;
+        // Reabre o microfone só depois de o bot acabar de falar.
+        if (conversa.ativa) retomarEscutaQuandoCalar();
       }
     }
 
@@ -1545,10 +2123,13 @@
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
         state.speechRecognition = settingSpeechRecognition.checked;
-        state.textToSpeech = settingTextToSpeech.checked;
+        // Durante o modo conversa o TTS está forçado; guardar não o pode desligar.
+        state.textToSpeech = conversa.ttsForcado ? true : settingTextToSpeech.checked;
         state.speechLang = settingSpeechLang.value;
         state.speechVoice = settingSpeechVoice.value;
         state.speechRate = parseFloat(settingSpeechRate.value);
+        state.conversaPausa = parseFloat(settingConversaPausa.value) || 1.5;
+        state.fraseFim = settingFraseFim.value.trim() || "até amanhã, adeus";
         state.gradioClient = null;
         apiChatCache = null;
 
@@ -1571,9 +2152,12 @@
         localStorage.setItem("chat_speech_lang", state.speechLang);
         localStorage.setItem("chat_speech_voice", state.speechVoice);
         localStorage.setItem("chat_speech_rate", state.speechRate);
+        localStorage.setItem("chat_conversa_pausa", state.conversaPausa);
+        localStorage.setItem("chat_frase_fim", state.fraseFim);
 
         appTitleDisplay.textContent = state.botName;
         updateBadge();
+        atualizarDicaFraseFim();
         settingsModal.classList.add("hidden");
         showToast("Configurações guardadas!");
       });
