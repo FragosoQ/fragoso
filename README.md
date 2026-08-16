@@ -82,11 +82,23 @@ Abrir a raiz (`http://localhost:8000/`) mostra uma página de estado com o URL e
 
 ### GitHub Codespaces
 
-Num Codespace o servidor **não está no seu computador**, por isso `localhost:8000` no browser não lhe chega. Três passos:
+Num Codespace o servidor **não está no seu computador**, por isso `localhost:8000` no browser não lhe chega.
 
-1. Arrancar: `python -m uvicorn server:app --port 8000`
-2. No separador **PORTS** do VS Code, na porta 8000: botão direito → **Port Visibility → Public**. Sem isto o browser recebe a página de login do GitHub em vez da resposta da API, e o erro aparece como CORS.
-3. Copiar o endereço reencaminhado (`https://<codespace>-8000.app.github.dev`) e usar **`https://<codespace>-8000.app.github.dev/api/chat`** nos Ajustes.
+**O `--host` é obrigatório.** Sem ele o uvicorn liga-se só a `127.0.0.1`, fica visível apenas dentro do contentor, e o separador **PORTS** mostra *"No forwarded ports"*:
+
+```bash
+python -m uvicorn server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Ou simplesmente `./iniciar-api.sh`, que já faz isso.
+
+Depois:
+
+1. A porta 8000 aparece no separador **PORTS**.
+2. Botão direito na porta → **Port Visibility → Public**. Sem isto o browser recebe a página de login do GitHub em vez da resposta da API, e o erro aparece disfarçado de CORS.
+3. Copiar o endereço reencaminhado e usar **`https://<codespace>-8000.app.github.dev/api/chat`** nos Ajustes.
+
+O `.devcontainer/devcontainer.json` incluído reencaminha as portas 8000 e 8080 automaticamente e instala as dependências ao criar o Codespace. Só produz efeito em Codespaces novos ou após **Rebuild Container**.
 
 O `server.py` já autoriza `*.app.github.dev` e `*.github.io` por CORS. A app deteta a situação e avisa se o URL apontar para `localhost` estando a página num domínio remoto.
 
@@ -195,6 +207,8 @@ E remover as linhas correspondentes do `.gitignore`.
 | `icons/` | Ícones 192/512, maskable, Apple touch e favicon |
 | `server.py` | API FastAPI de exemplo para o modo "Servidor Customizado" |
 | `iniciar-api.bat` | Arranca a API no Windows com duplo-clique |
+| `iniciar-api.sh` | Arranca a API no Linux/macOS/Codespaces (com `--host 0.0.0.0`) |
+| `.devcontainer/` | Reencaminha as portas 8000 e 8080 no Codespaces |
 | `requirements.txt` | Dependências Python da API |
 | `.nojekyll` | Impede o GitHub Pages de processar os ficheiros com Jekyll |
 | `.gitignore` | Exclui modelos, ambientes virtuais e ficheiros de sistema |

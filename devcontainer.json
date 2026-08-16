@@ -1,0 +1,28 @@
+{
+  "name": "Fragoso Bot",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12",
+
+  // Portas reencaminhadas automaticamente ao abrir o Codespace.
+  "forwardPorts": [8000, 8080],
+
+  "portsAttributes": {
+    "8000": {
+      "label": "API FastAPI",
+      "visibility": "public",
+      "onAutoForward": "notify"
+    },
+    "8080": {
+      "label": "App (ficheiros estaticos)",
+      "visibility": "public",
+      "onAutoForward": "openPreview"
+    }
+  },
+
+  "postCreateCommand": "pip install -r requirements.txt",
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python"]
+    }
+  }
+}
