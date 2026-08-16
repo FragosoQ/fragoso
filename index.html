@@ -583,12 +583,29 @@
     const speechSynthesis = window.speechSynthesis;
     let recognition = null;
 
+    // Descarta o objeto anterior e cria um novo já configurado. Reutilizar o
+    // mesmo depois de vários stop()/start() faz o Chrome deixar de arrancar.
+    function recriarReconhecimento() {
+      if (!SpeechRecognition) {
+        showToast("Reconhecimento de voz não suportado neste navegador.", "error");
+        return;
+      }
+      if (recognition) {
+        // Silenciar o objeto antigo para não disparar reaberturas fantasma.
+        recognition.onstart = recognition.onresult = recognition.onerror = recognition.onend = null;
+        try { recognition.abort(); } catch (_) {}
+      }
+      recognition = null;
+      state.isListening = false;
+      initSpeechRecognition();
+    }
+
     function initSpeechRecognition() {
       if (!SpeechRecognition) {
         showToast("Reconhecimento de voz não suportado neste navegador.", "error");
         return;
       }
-      
+
       if (!recognition) {
         recognition = new SpeechRecognition();
         recognition.lang = state.speechLang;
@@ -669,7 +686,11 @@
       timerSilencio: null,
       paradoDeProposito: false,
       ultimaReabertura: 0,
-      timerReabertura: null
+      timerReabertura: null,
+      timerRetoma: null,
+      vigia: null,
+      paradoDesde: 0,
+      ultimoSom: 0
     };
 
     // ===== VISUALIZADOR DE ÁUDIO =====
@@ -942,6 +963,7 @@
       conversa.paradoDeProposito = true;
       clearTimeout(conversa.timerSilencio);
       clearTimeout(conversa.timerReabertura);
+      clearTimeout(conversa.timerRetoma);
       if (recognition) {
         try { recognition.stop(); } catch (_) {}
       }
@@ -949,25 +971,33 @@
 
     function iniciarEscuta() {
       if (!conversa.ativa) return;
-      if (speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending)) {
+      if (fala.ativa) {
         retomarEscutaQuandoCalar();
         return;
       }
-      initSpeechRecognition();
+
+      // Reciclar o mesmo objeto após vários stop()/start() é a principal razão
+      // para o reconhecimento do Chrome deixar de arrancar. Criar um novo.
+      recriarReconhecimento();
       if (!recognition) return;
+
       conversa.paradoDeProposito = false;
       conversa.buffer = "";
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = state.speechLang;
+
       try {
         recognition.start();
         definirEstadoConversa("ouvir");
       } catch (err) {
-        // InvalidStateError = já estava a ouvir; qualquer outra coisa é real.
-        if (!/InvalidState/i.test(String(err && err.name))) {
-          sairModoConversa("Não consegui abrir o microfone: " + err.message, true);
+        // InvalidStateError = ainda não largou o microfone. Voltar a tentar,
+        // em vez de desistir em silêncio (era isto que matava a conversa).
+        if (/InvalidState/i.test(String(err && err.name))) {
+          reabrirEscuta();
+          return;
         }
+        sairModoConversa("Não consegui abrir o microfone: " + err.message, true);
       }
     }
 
@@ -976,27 +1006,53 @@
       if (!conversa.ativa) return;
       clearTimeout(conversa.timerReabertura);
       const desdeUltima = Date.now() - conversa.ultimaReabertura;
-      const espera = desdeUltima < 1000 ? 800 : 200;
+      const espera = desdeUltima < 1000 ? 900 : 250;
       conversa.ultimaReabertura = Date.now();
       conversa.timerReabertura = setTimeout(iniciarEscuta, espera);
     }
 
     // Espera o fim da síntese de voz antes de reabrir o microfone.
+    // Usa o estado próprio da fala, com limite de tempo: se o motor encravar,
+    // desiste, corta a fala e volta a ouvir na mesma.
     function retomarEscutaQuandoCalar() {
       if (!conversa.ativa) return;
       definirEstadoConversa("falar");
-      let tentativas = 0;
+      clearTimeout(conversa.timerRetoma);
+
+      const limite = Date.now() + 120000; // teto absoluto de 2 minutos
       const verificar = () => {
         if (!conversa.ativa) return;
-        const ocupado = speechSynthesis && (speechSynthesis.speaking || speechSynthesis.pending);
-        if (ocupado && tentativas++ < 900) {
-          setTimeout(verificar, 200);
+        if (fala.ativa && Date.now() < limite) {
+          conversa.timerRetoma = setTimeout(verificar, 200);
           return;
         }
+        if (fala.ativa) pararFala(); // encravou: cortar e seguir
         iniciarEscuta();
       };
-      // speakText adia o speak() em ~120 ms; dar margem antes de testar.
-      setTimeout(verificar, 300);
+      // falarAgora adia o primeiro speak() ~140 ms; dar margem antes de testar.
+      conversa.timerRetoma = setTimeout(verificar, 350);
+    }
+
+    // Rede de segurança final: se por alguma razão ficarmos parados sem estar
+    // a ouvir, a falar nem à espera do modelo, voltar a abrir o microfone.
+    function iniciarVigia() {
+      clearInterval(conversa.vigia);
+      conversa.vigia = setInterval(() => {
+        if (!conversa.ativa) return;
+        if (state.isLoading || fala.ativa || state.isListening) {
+          conversa.paradoDesde = 0;
+          return;
+        }
+        if (!conversa.paradoDesde) {
+          conversa.paradoDesde = Date.now();
+          return;
+        }
+        if (Date.now() - conversa.paradoDesde > 4000) {
+          conversa.paradoDesde = 0;
+          console.warn("[conversa] parada detetada — a reabrir o microfone");
+          iniciarEscuta();
+        }
+      }, 2000);
     }
 
     function despedir(textoDito) {
@@ -1052,6 +1108,7 @@
 
       definirEstadoConversa("pausa", "A abrir o microfone…");
       desenharOnda();
+      iniciarVigia();
 
       // O visualizador usa um stream próprio; se falhar, a onda fica sintética.
       iniciarVisualizador().finally(() => {
@@ -1062,6 +1119,9 @@
     function sairModoConversa(mensagem, comoErro) {
       if (!conversa.ativa) return;
       conversa.ativa = false;
+      clearInterval(conversa.vigia);
+      conversa.vigia = null;
+      conversa.paradoDesde = 0;
       pararEscuta();
       pararVisualizador();
       conversa.buffer = "";
@@ -1186,34 +1246,121 @@
       falarAgora(text);
     }
 
+    // Estado próprio da fala. NÃO confiar em speechSynthesis.speaking: no Chrome
+    // essa flag fica presa a true quando o motor encrava, e nada mais é falado.
+    const fala = { ativa: false, fila: [], bomba: null, guarda: null, sonda: null };
+
+    // O Chrome corta a fala por volta dos 15 segundos e depois bloqueia.
+    // Partir em frases curtas e encadeá-las evita o problema por completo.
+    function partirEmPedacos(texto, limite = 180) {
+      const frases = String(texto).match(/[^.!?…\n]+[.!?…]*\s*|\n+/g) || [String(texto)];
+      const pedacos = [];
+      let atual = "";
+
+      for (let frase of frases) {
+        // Frase única maior que o limite: partir por vírgulas ou à força.
+        while (frase.length > limite) {
+          const corte = frase.lastIndexOf(",", limite);
+          const ponto = corte > limite * 0.4 ? corte + 1 : limite;
+          if (atual.trim()) { pedacos.push(atual.trim()); atual = ""; }
+          pedacos.push(frase.slice(0, ponto).trim());
+          frase = frase.slice(ponto);
+        }
+        if ((atual + frase).length > limite) {
+          if (atual.trim()) pedacos.push(atual.trim());
+          atual = frase;
+        } else {
+          atual += frase;
+        }
+      }
+      if (atual.trim()) pedacos.push(atual.trim());
+      return pedacos.filter(Boolean);
+    }
+
+    function pararFala() {
+      fala.ativa = false;
+      fala.fila = [];
+      clearInterval(fala.bomba);
+      clearInterval(fala.sonda);
+      clearTimeout(fala.guarda);
+      fala.bomba = fala.sonda = fala.guarda = null;
+      try { speechSynthesis.cancel(); } catch (_) {}
+    }
+
     function falarAgora(text) {
       const voz = escolherVoz(state.speechLang);
       if (!voz && vozesCache.length) {
         showToast(`O sistema não tem nenhuma voz instalada para ${state.speechLang}.`, "error");
       }
 
-      const falar = () => {
-        const utterance = new SpeechSynthesisUtterance(text);
-        // A ordem importa: primeiro a voz, depois o lang (para não entrarem em conflito).
-        if (voz) {
-          utterance.voice = voz;
-          utterance.lang = voz.lang;
-        } else {
-          utterance.lang = state.speechLang;
-        }
-        utterance.rate = state.speechRate;
-        utterance.pitch = 1;
-        utterance.volume = 1;
-        speechSynthesis.speak(utterance);
+      pararFala();
+      fala.fila = partirEmPedacos(text);
+      if (!fala.fila.length) return;
+      fala.ativa = true;
+
+      // O Chrome suspende a síntese sozinho em separadores longos; este "empurrão"
+      // periódico mantém-na viva. Inofensivo nos outros browsers.
+      fala.bomba = setInterval(() => {
+        if (!fala.ativa) return;
+        if (speechSynthesis.paused) speechSynthesis.resume();
+      }, 5000);
+
+      const proximo = () => {
+        if (!fala.ativa) return;
+        const pedaco = fala.fila.shift();
+        if (pedaco === undefined) { pararFala(); return; }
+
+        const u = new SpeechSynthesisUtterance(pedaco);
+        // A ordem importa: primeiro a voz, depois o lang.
+        if (voz) { u.voice = voz; u.lang = voz.lang; }
+        else { u.lang = state.speechLang; }
+        u.rate = state.speechRate;
+        u.pitch = 1;
+        u.volume = 1;
+
+        let avancou = false;
+
+        const avancar = (encravou) => {
+          if (avancou) return;
+          avancou = true;
+          clearTimeout(fala.guarda);
+          clearInterval(fala.sonda);
+          if (!fala.ativa) return;
+
+          if (encravou) {
+            // O motor bloqueou. Não vale a pena insistir com os pedaços
+            // seguintes — cada um custaria outra espera. Cortar e devolver
+            // o microfone imediatamente.
+            console.warn("[voz] síntese encravada — a cortar e a retomar a escuta");
+            pararFala();
+            return;
+          }
+          setTimeout(proximo, 60);
+        };
+
+        u.onend = () => avancar(false);
+        u.onerror = () => avancar(false); // pedaço problemático: saltar para o seguinte
+
+        // Caminho rápido: alguns motores descartam a fala sem avisar. Se deixaram
+        // de estar ocupados, o pedaço acabou (ou nunca chegou a começar).
+        let ciclos = 0;
+        fala.sonda = setInterval(() => {
+          if (avancou) return;
+          const ocupado = speechSynthesis.speaking || speechSynthesis.pending;
+          if (!ocupado && ++ciclos >= 2) avancar(false);
+          else if (ocupado) ciclos = 0;
+        }, 250);
+
+        // Rede de segurança: se nada disto acontecer, o motor está encravado.
+        // ~75 ms por caráter à velocidade normal, com margem.
+        const previsto = Math.max(2500, (pedaco.length * 75) / (state.speechRate || 1)) + 2000;
+        fala.guarda = setTimeout(() => avancar(true), previsto);
+
+        speechSynthesis.speak(u);
       };
 
       // O Chrome ignora um speak() disparado no mesmo tick de um cancel().
-      if (speechSynthesis.speaking || speechSynthesis.pending) {
-        speechSynthesis.cancel();
-        setTimeout(falar, 120);
-      } else {
-        falar();
-      }
+      setTimeout(proximo, 140);
     }
 
     // Preenche o seletor de vozes com as disponíveis para o idioma escolhido.
@@ -1353,7 +1500,7 @@
       // Parar a fala ao sair da página evita que continue a ler noutro separador
       window.addEventListener("pagehide", () => {
         sairModoConversa(null, false);
-        if (speechSynthesis) speechSynthesis.cancel();
+        if (speechSynthesis) pararFala();
       });
 
       // Sem rede, o reconhecimento do Chrome deixa de funcionar
