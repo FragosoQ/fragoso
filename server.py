@@ -12,22 +12,24 @@ from pydantic import BaseModel, Field
 
 app = FastAPI(title="Fragoso Bot API")
 
-# Origens autorizadas. Em produção, listar explicitamente — "*" com
-# allow_credentials=True é rejeitado pelo browser (combinação inválida).
+# Origens autorizadas.
+#   - Qualquer porta de localhost é aceite (o servidor estático muda de porta
+#     conforme a ferramenta: 8080, 5500 do Live Server, 5173 do Vite...).
+#   - Para o GitHub Pages, acrescentar a origem em FRAGOSO_ORIGINS:
+#       FRAGOSO_ORIGINS=https://utilizador.github.io python -m uvicorn server:app
+# Nunca usar "*" com allow_credentials=True: o browser rejeita a combinação.
+LOCALHOST_REGEX = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+
 ALLOWED_ORIGINS = [
-    o.strip()
-    for o in os.getenv(
-        "FRAGOSO_ORIGINS",
-        "http://localhost:8080,http://127.0.0.1:8080",
-    ).split(",")
-    if o.strip()
+    o.strip() for o in os.getenv("FRAGOSO_ORIGINS", "").split(",") if o.strip()
 ]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=os.getenv("FRAGOSO_ORIGIN_REGEX", LOCALHOST_REGEX),
     allow_credentials=False,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 

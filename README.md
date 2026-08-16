@@ -59,6 +59,36 @@ python3 -m http.server 8080
 - expor a API em HTTPS (Cloudflare Tunnel, ngrok, ou um domínio próprio);
 - ou usar a versão local do ficheiro para falar com a API local.
 
+## API própria (FastAPI)
+
+O `server.py` incluído é um esqueleto funcional. Arrancar:
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn server:app --port 8000 --reload
+```
+
+No Windows, se `python` não for reconhecido, usar `py -m uvicorn server:app --port 8000 --reload`.
+
+Confirmar em `http://localhost:8000/health` — deve devolver `{"status":"ok"}`.
+
+Nos **Ajustes → FastAPI / Servidor Customizado** há um botão **Testar a API** que diz exatamente onde está o problema: servidor em baixo, rota errada, resposta sem o campo `response`, ou bloqueio por HTTPS/HTTP.
+
+### Erros comuns
+
+| Sintoma | Causa | Solução |
+|---|---|---|
+| `ERR_CONNECTION_REFUSED` / "Failed to fetch" | O `server.py` não está a correr | Arrancar o uvicorn (acima) |
+| Funciona no Chrome, falha noutro browser | Página em HTTPS a chamar `http://` | Expor a API em HTTPS |
+| `CORS policy` na consola | A origem da página não está autorizada | Ver abaixo |
+| Resposta vazia no chat | O JSON não tem o campo `response` | Devolver `{"response": "..."}` |
+
+O `server.py` já aceita **qualquer porta de `localhost`**, por isso serve o `python -m http.server 8080`, o Live Server (5500) ou o Vite (5173) sem configuração. Para o GitHub Pages, indicar a origem:
+
+```bash
+FRAGOSO_ORIGINS=https://utilizador.github.io python -m uvicorn server:app --port 8000
+```
+
 **A API precisa de CORS.** Em FastAPI:
 
 ```python

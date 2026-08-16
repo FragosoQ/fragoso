@@ -319,6 +319,13 @@
           <div id="field-custom-api" class="hidden">
             <label class="block font-semibold text-slate-200 mb-1">URL Endpoint da API</label>
             <input type="text" id="setting-api-url" placeholder="http://localhost:8000/api/chat" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+            <p class="text-[11px] text-slate-400 mt-1">Arranque o servidor na pasta do projeto: <code class="text-brand-400">python -m uvicorn server:app --port 8000</code></p>
+
+            <button type="button" id="test-api-btn" class="mt-3 px-3 py-1.5 bg-slate-800 hover:bg-brand-600/30 border border-slate-700 hover:border-brand-500 rounded-lg text-[11px] text-slate-200 transition-colors flex items-center gap-1.5 disabled:opacity-50">
+              <i class="fa-solid fa-stethoscope text-brand-400"></i>
+              <span>Testar a API</span>
+            </button>
+            <pre id="test-api-out" class="hidden mt-2 bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-[10px] text-slate-300 font-mono whitespace-pre-wrap break-words max-h-48 overflow-y-auto"></pre>
           </div>
 
           <!-- Controles de Voz -->
@@ -492,6 +499,8 @@
     const settingImageEndpoint = document.getElementById("setting-image-endpoint");
     const imageBtn = document.getElementById("image-btn");
     const settingApiUrl = document.getElementById("setting-api-url");
+    const testApiBtn = document.getElementById("test-api-btn");
+    const testApiOut = document.getElementById("test-api-out");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
     const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
@@ -1473,15 +1482,22 @@
             throw new Error("A página está em HTTPS e a API em HTTP — o browser bloqueia a chamada. Exponha a API em HTTPS (Cloudflare Tunnel, ngrok) ou abra a app localmente.");
           }
 
-          const response = await fetch(state.apiUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              system_prompt: state.systemPrompt,
-              history: historicoMensagens(),
-              message: userText
-            })
-          });
+          // fetch() só rejeita em falhas de rede — "Failed to fetch" não diz nada
+          // ao utilizador, por isso é traduzido para instruções concretas.
+          let response;
+          try {
+            response = await fetch(state.apiUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                system_prompt: state.systemPrompt,
+                history: historicoMensagens(),
+                message: userText
+              })
+            });
+          } catch (err) {
+            throw new Error(explicarFalhaRede(state.apiUrl, err));
+          }
 
           // Leitura defensiva do corpo para evitar SyntaxError: Unexpected end of input
           const responseText = await response.text();
@@ -1524,7 +1540,8 @@
         typingEl.remove();
         appendMessage("assistant", `⚠️ **Erro na conexão:** ${err.message}`);
         if (conversa.ativa) conversaResposta.textContent = "⚠️ " + err.message.slice(0, 240);
-        showToast(err.message, "error");
+        // O toast é uma linha; o detalhe completo fica na mensagem do chat.
+        showToast(err.message.split("\n")[0], "error");
       } finally {
         state.isLoading = false;
         sendBtn.disabled = false;
@@ -1706,6 +1723,88 @@
       }
 
       throw new Error(explicarErroGradio(ultimoErro, endpoint, params));
+    }
+
+    // "Failed to fetch" / ERR_CONNECTION_REFUSED: o pedido nem chegou a sair.
+    function explicarFalhaRede(url, err) {
+      let host = url;
+      let local = false;
+      try {
+        const u = new URL(url);
+        host = u.host;
+        local = /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(u.hostname);
+      } catch (_) {
+        return `O URL "${url}" não é válido. Corrija-o nos Ajustes (exemplo: http://localhost:8000/api/chat).`;
+      }
+
+      if (local) {
+        return `Ninguém está a atender em ${host} — o servidor não está a correr.\n` +
+               `1. Abra um terminal na pasta do projeto.\n` +
+               `2. Instale (uma vez): pip install -r requirements.txt\n` +
+               `3. Arranque: python -m uvicorn server:app --port 8000\n` +
+               `4. Confirme em http://${host}/health que devolve {"status":"ok"}.\n` +
+               `Se usar outra porta, atualize o URL nos Ajustes.`;
+      }
+
+      return `Não consegui contactar ${host}. Confirme o URL nos Ajustes, que o servidor está online, ` +
+             `e que aceita pedidos de ${location.origin} (CORS). Detalhe: ${String(err && err.message || err)}`;
+    }
+
+    // Diagnóstico da API própria: distingue "não arrancou" de "arrancou mas responde mal".
+    async function testarApi() {
+      const url = settingApiUrl.value.trim();
+      if (!url) {
+        showToast("Escreva primeiro o URL da API.", "error");
+        return;
+      }
+
+      testApiBtn.disabled = true;
+      testApiOut.classList.remove("hidden");
+      testApiOut.textContent = "A contactar " + url + " …";
+
+      const linhas = [];
+      try {
+        const u = new URL(url);
+
+        if (location.protocol === "https:" && u.protocol === "http:"
+            && !/^(localhost|127\.0\.0\.1)$/i.test(u.hostname)) {
+          linhas.push("AVISO: a página está em HTTPS e a API em HTTP — o browser bloqueia.");
+        }
+
+        try {
+          const h = await fetch(new URL("/health", u).href);
+          linhas.push(`GET /health  -> ${h.status}${h.ok ? " OK" : ""}`);
+        } catch (_) {
+          linhas.push("GET /health  -> sem resposta (o servidor pode não ter esta rota)");
+        }
+
+        const r = await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: "teste de ligação", history: [], system_prompt: state.systemPrompt })
+        });
+        const corpo = await r.text();
+        linhas.push(`POST ${u.pathname} -> ${r.status}`);
+        linhas.push("Corpo: " + (corpo.slice(0, 220) || "(vazio)"));
+
+        if (r.ok) {
+          try {
+            const d = JSON.parse(corpo);
+            linhas.push((d.response || d.message)
+              ? "OK: campo \"response\" encontrado. A ligação está boa."
+              : "AVISO: falta o campo \"response\" no JSON devolvido.");
+          } catch (_) {
+            linhas.push("AVISO: a resposta não é JSON válido.");
+          }
+        }
+      } catch (err) {
+        linhas.push("FALHOU:");
+        linhas.push(explicarFalhaRede(url, err));
+      } finally {
+        testApiBtn.disabled = false;
+      }
+
+      testApiOut.textContent = linhas.join("\n");
     }
 
     function urlViewApi() {
@@ -2094,6 +2193,7 @@
       closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
       settingProvider.addEventListener("change", updateProviderFieldsVisibility);
       testSpaceBtn.addEventListener("click", testarLigacaoSpace);
+      testApiBtn.addEventListener("click", testarApi);
 
       // Fechar os Ajustes com Escape ou clique fora
       settingsModal.addEventListener("click", (e) => {
