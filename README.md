@@ -78,6 +78,18 @@ Confirmar em `http://localhost:8000/health` — deve devolver `{"status":"ok"}`.
 
 Nos **Ajustes → FastAPI / Servidor Customizado** há um botão **Testar a API** que diz exatamente onde está o problema: servidor em baixo, rota errada, resposta sem o campo `response`, ou bloqueio por HTTPS/HTTP.
 
+Abrir a raiz (`http://localhost:8000/`) mostra uma página de estado com o URL exato a colar nos Ajustes. `/docs` dá a documentação interativa.
+
+### GitHub Codespaces
+
+Num Codespace o servidor **não está no seu computador**, por isso `localhost:8000` no browser não lhe chega. Três passos:
+
+1. Arrancar: `python -m uvicorn server:app --port 8000`
+2. No separador **PORTS** do VS Code, na porta 8000: botão direito → **Port Visibility → Public**. Sem isto o browser recebe a página de login do GitHub em vez da resposta da API, e o erro aparece como CORS.
+3. Copiar o endereço reencaminhado (`https://<codespace>-8000.app.github.dev`) e usar **`https://<codespace>-8000.app.github.dev/api/chat`** nos Ajustes.
+
+O `server.py` já autoriza `*.app.github.dev` e `*.github.io` por CORS. A app deteta a situação e avisa se o URL apontar para `localhost` estando a página num domínio remoto.
+
 ### Erros comuns
 
 | Sintoma | Causa | Solução |

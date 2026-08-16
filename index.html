@@ -1476,6 +1476,9 @@
           if (!state.apiUrl) {
             throw new Error("Defina o URL da API nos Ajustes.");
           }
+          const aviso = avisoApiLocal(state.apiUrl);
+          if (aviso) throw new Error(aviso);
+
           // Uma página em HTTPS não pode chamar http:// — o browser bloqueia sem explicação útil.
           if (location.protocol === "https:" && /^http:\/\//i.test(state.apiUrl)
               && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(state.apiUrl)) {
@@ -1725,6 +1728,27 @@
       throw new Error(explicarErroGradio(ultimoErro, endpoint, params));
     }
 
+    function ehHostLocal(hostname) {
+      return /^(localhost|127\.0\.0\.1|\[::1\])$/i.test(hostname);
+    }
+
+    // Armadilha clássica: a página está num servidor remoto (Codespaces, Pages)
+    // mas a API aponta para "localhost" — que é a máquina de quem abre a página.
+    function avisoApiLocal(url) {
+      let u;
+      try { u = new URL(url); } catch (_) { return null; }
+      if (ehHostLocal(location.hostname) || !ehHostLocal(u.hostname)) return null;
+
+      let dica = "";
+      if (/\.app\.github\.dev$/i.test(location.hostname)) {
+        const reencaminhado = location.hostname.replace(/-\d+\.app\.github\.dev$/i, "-8000.app.github.dev");
+        dica = `\nNo Codespaces: abra o separador PORTS, ponha a porta 8000 em "Public" e use\n` +
+               `https://${reencaminhado}/api/chat`;
+      }
+      return `A página está em ${location.host} mas a API aponta para ${u.host}.\n` +
+             `"localhost" aqui é o computador de quem abre a página, não o servidor onde a API corre.${dica}`;
+    }
+
     // "Failed to fetch" / ERR_CONNECTION_REFUSED: o pedido nem chegou a sair.
     function explicarFalhaRede(url, err) {
       let host = url;
@@ -1765,6 +1789,9 @@
       const linhas = [];
       try {
         const u = new URL(url);
+
+        const aviso = avisoApiLocal(url);
+        if (aviso) linhas.push("AVISO: " + aviso);
 
         if (location.protocol === "https:" && u.protocol === "http:"
             && !/^(localhost|127\.0\.0\.1)$/i.test(u.hostname)) {
