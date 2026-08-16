@@ -61,7 +61,11 @@ python3 -m http.server 8080
 
 ## API própria (FastAPI)
 
-O `server.py` incluído é um esqueleto funcional. Arrancar:
+**A API só é precisa no modo "FastAPI / Servidor Customizado".** Nos modos *Demo Local* e *Hugging Face Space* não é preciso servidor nenhum — se vir erros de ligação, confirme primeiro qual a origem escolhida nos Ajustes.
+
+**Windows:** duplo-clique em `iniciar-api.bat`. Procura o Python, instala as dependências e arranca o servidor. Deixar a janela aberta enquanto usa a app.
+
+O `server.py` incluído é um esqueleto funcional. Arrancar à mão:
 
 ```bash
 pip install -r requirements.txt
@@ -178,5 +182,7 @@ E remover as linhas correspondentes do `.gitignore`.
 | `sw.js` | Service worker: funcionamento offline e cache |
 | `icons/` | Ícones 192/512, maskable, Apple touch e favicon |
 | `server.py` | API FastAPI de exemplo para o modo "Servidor Customizado" |
+| `iniciar-api.bat` | Arranca a API no Windows com duplo-clique |
+| `requirements.txt` | Dependências Python da API |
 | `.nojekyll` | Impede o GitHub Pages de processar os ficheiros com Jekyll |
 | `.gitignore` | Exclui modelos, ambientes virtuais e ficheiros de sistema |
