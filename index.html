@@ -489,6 +489,50 @@
       </div>
     </div>
 
+    <!-- Quadro: mostra o resultado visual do código -->
+    <div id="canvas-overlay" class="hidden absolute inset-0 z-[45] bg-slate-950 flex-col">
+
+      <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-800 bg-slate-900 shrink-0">
+        <div class="flex items-center gap-2 min-w-0">
+          <i class="fa-solid fa-window-maximize text-brand-400 text-sm"></i>
+          <span class="text-sm font-semibold text-slate-100 truncate">Quadro</span>
+          <span id="canvas-info" class="text-[10px] text-slate-500 truncate hidden sm:inline"></span>
+        </div>
+
+        <div class="flex items-center gap-1 shrink-0">
+          <div class="flex rounded-lg overflow-hidden border border-slate-700 mr-1">
+            <button type="button" id="canvas-tab-ver" class="px-2.5 py-1.5 text-[11px] bg-brand-600 text-white transition-colors">Resultado</button>
+            <button type="button" id="canvas-tab-cod" class="px-2.5 py-1.5 text-[11px] bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">Código</button>
+          </div>
+          <button type="button" id="canvas-atualizar" title="Atualizar" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">
+            <i class="fa-solid fa-rotate-right text-xs"></i>
+          </button>
+          <button type="button" id="canvas-copiar" title="Copiar código" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">
+            <i class="fa-solid fa-copy text-xs"></i>
+          </button>
+          <button type="button" id="canvas-descarregar" title="Descarregar .html" class="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors">
+            <i class="fa-solid fa-download text-xs"></i>
+          </button>
+          <button type="button" id="canvas-fechar" title="Fechar" class="p-2 rounded-lg bg-slate-800 hover:bg-red-500/20 hover:text-red-300 text-slate-300 transition-colors">
+            <i class="fa-solid fa-xmark text-xs"></i>
+          </button>
+        </div>
+      </div>
+
+      <div id="canvas-painel-ver" class="flex-1 bg-white overflow-hidden">
+        <iframe id="canvas-frame" class="w-full h-full border-0" sandbox="allow-scripts allow-forms allow-popups" title="Resultado do código"></iframe>
+      </div>
+
+      <div id="canvas-painel-cod" class="hidden flex-1 overflow-hidden">
+        <textarea id="canvas-codigo" spellcheck="false"
+          class="w-full h-full bg-slate-950 text-slate-200 font-mono text-[12px] leading-relaxed p-3 resize-none focus:outline-none"></textarea>
+      </div>
+
+      <div class="px-3 py-1.5 border-t border-slate-800 bg-slate-900 text-[10px] text-slate-500 shrink-0">
+        Edite o código e o resultado atualiza-se sozinho. Corre isolado, sem acesso à app.
+      </div>
+    </div>
+
     <!-- Pedido de código para entrar nos Ajustes -->
     <div id="password-modal" class="hidden fixed inset-0 bg-slate-950/85 backdrop-blur-sm items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xs overflow-hidden shadow-2xl">
@@ -522,7 +566,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v23";
+    const APP_VERSAO = "v24";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -715,6 +759,18 @@
     const settingApiUrl = document.getElementById("setting-api-url");
     const testApiBtn = document.getElementById("test-api-btn");
     const testApiOut = document.getElementById("test-api-out");
+    const canvasOverlay = document.getElementById("canvas-overlay");
+    const canvasFrame = document.getElementById("canvas-frame");
+    const canvasCodigo = document.getElementById("canvas-codigo");
+    const canvasInfo = document.getElementById("canvas-info");
+    const canvasPainelVer = document.getElementById("canvas-painel-ver");
+    const canvasPainelCod = document.getElementById("canvas-painel-cod");
+    const canvasTabVer = document.getElementById("canvas-tab-ver");
+    const canvasTabCod = document.getElementById("canvas-tab-cod");
+    const canvasAtualizar = document.getElementById("canvas-atualizar");
+    const canvasCopiar = document.getElementById("canvas-copiar");
+    const canvasDescarregar = document.getElementById("canvas-descarregar");
+    const canvasFechar = document.getElementById("canvas-fechar");
     const passwordModal = document.getElementById("password-modal");
     const passwordInput = document.getElementById("password-input");
     const passwordErro = document.getElementById("password-erro");
@@ -2409,13 +2465,130 @@
       return /^(https?:|data:image\/|blob:)/i.test(u) ? escapeHtml(u) : "";
     }
 
+    // ===== QUADRO (canvas) =====
+
+    // Separa os blocos ```linguagem ... ``` do texto normal.
+    function extrairBlocos(texto) {
+      const blocos = [];
+      const resto = String(texto || "").replace(
+        /```([\w+#-]*)[ \t]*\r?\n?([\s\S]*?)```/g,
+        (_, lang, codigo) => {
+          const i = blocos.length;
+          blocos.push({ lang: (lang || "").toLowerCase(), codigo: codigo.replace(/\s+$/, "") });
+          return ` BLOCO${i} `;
+        }
+      );
+      return { resto, blocos };
+    }
+
+    const LINGUAGENS_WEB = /^(html|xml|svg|css|js|javascript|jsx|)$/;
+
+    function temCodigoVisual(blocos) {
+      return blocos.some(b => {
+        if (b.lang === "css" || /^(js|javascript)$/.test(b.lang)) return true;
+        if (/^(html|xml|svg)$/.test(b.lang)) return true;
+        // Bloco sem linguagem indicada mas com aspeto de HTML
+        return b.lang === "" && /<[a-z!][^>]*>/i.test(b.codigo);
+      });
+    }
+
+    // Junta os blocos num documento único para pré-visualizar.
+    function montarDocumento(blocos) {
+      const uteis = blocos.filter(b => LINGUAGENS_WEB.test(b.lang));
+      const css = uteis.filter(b => b.lang === "css").map(b => b.codigo).join("\n\n");
+      const js = uteis.filter(b => /^(js|javascript)$/.test(b.lang)).map(b => b.codigo).join("\n\n");
+      const marcacao = uteis
+        .filter(b => /^(html|xml|svg)$/.test(b.lang) || (b.lang === "" && /<[a-z!][^>]*>/i.test(b.codigo)))
+        .map(b => b.codigo).join("\n");
+
+      // Documento já completo: injetar o que falta antes de </head> e </body>.
+      if (/<html[\s>]/i.test(marcacao)) {
+        let doc = marcacao;
+        if (css) {
+          doc = /<\/head>/i.test(doc)
+            ? doc.replace(/<\/head>/i, `<style>\n${css}\n</style>\n</head>`)
+            : `<style>\n${css}\n</style>\n` + doc;
+        }
+        if (js) {
+          doc = /<\/body>/i.test(doc)
+            ? doc.replace(/<\/body>/i, `<script>\n${js}\n<\/script>\n</body>`)
+            : doc + `\n<script>\n${js}\n<\/script>`;
+        }
+        return doc;
+      }
+
+      return `<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body { font-family: system-ui, -apple-system, sans-serif; margin: 16px; }
+${css}
+</style>
+</head>
+<body>
+${marcacao}
+<script>
+${js}
+<\/script>
+</body>
+</html>`;
+    }
+
+    let temporizadorQuadro = null;
+
+    function abrirQuadro(documento, blocos) {
+      canvasCodigo.value = documento;
+      canvasInfo.textContent = blocos
+        ? blocos.filter(b => LINGUAGENS_WEB.test(b.lang)).map(b => b.lang || "html").join(" · ")
+        : "";
+      canvasOverlay.classList.remove("hidden");
+      canvasOverlay.classList.add("flex");
+      mostrarAbaQuadro("ver");
+      desenharQuadro();
+      // A fala do modo conversa não deve continuar por cima do quadro.
+      if (fala.ativa) pararFala();
+    }
+
+    function fecharQuadro() {
+      canvasOverlay.classList.add("hidden");
+      canvasOverlay.classList.remove("flex");
+      canvasFrame.srcdoc = "";  // pára scripts e som que estivessem a correr
+    }
+
+    function mostrarAbaQuadro(aba) {
+      const ver = aba === "ver";
+      canvasPainelVer.classList.toggle("hidden", !ver);
+      canvasPainelCod.classList.toggle("hidden", ver);
+      canvasTabVer.className = "px-2.5 py-1.5 text-[11px] transition-colors " +
+        (ver ? "bg-brand-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700");
+      canvasTabCod.className = "px-2.5 py-1.5 text-[11px] transition-colors " +
+        (!ver ? "bg-brand-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700");
+    }
+
+    // srcdoc + sandbox sem allow-same-origin: o código corre numa origem
+    // própria e não consegue tocar na app, no localStorage nem no token.
+    function desenharQuadro() {
+      canvasFrame.srcdoc = canvasCodigo.value;
+    }
+
+    function agendarDesenho() {
+      clearTimeout(temporizadorQuadro);
+      temporizadorQuadro = setTimeout(desenharQuadro, 700);
+    }
+
     function appendMessage(role, text) {
       const isUser = role === "user";
       const div = document.createElement("div");
       div.className = `flex gap-3 text-xs sm:text-sm ${isUser ? "justify-end" : "justify-start"} animate-fade-in`;
 
-      const safeText = escapeHtml(text || "");
-      const formatted = safeText
+      // Os blocos de código saem de cena antes do escape, para não serem
+      // atropelados pela formatação de negrito, links e quebras de linha.
+      const { resto, blocos } = extrairBlocos(text || "");
+
+      const safeText = escapeHtml(resto);
+      let formatted = safeText
         .replace(/`([^`]+)`/g, '<code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">$1</code>')
         // Links markdown [texto](url) antes dos URLs soltos, senão o url interno
         // seria transformado primeiro e partia a sintaxe.
@@ -2426,6 +2599,14 @@
           '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="text-brand-400 hover:text-brand-300 underline break-all">$2</a>')
         .replace(/\n/g, "<br>")
         .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
+
+      // Reinserir os blocos já formatados como código.
+      formatted = formatted.replace(/ BLOCO(\d+) /g, (_, i) => {
+        const b = blocos[Number(i)];
+        if (!b) return "";
+        const etiqueta = b.lang ? `<div class="text-[10px] text-slate-500 mb-1 font-mono">${escapeHtml(b.lang)}</div>` : "";
+        return `<div class="my-2">${etiqueta}<pre class="bg-slate-950 border border-slate-800 rounded-lg p-3 overflow-x-auto text-[11px] leading-relaxed"><code class="font-mono text-indigo-200">${escapeHtml(b.codigo)}</code></pre></div>`;
+      });
 
       const avatarHtml = isUser
         ? `<div class="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0"><i class="fa-solid fa-user text-xs"></i></div>`
@@ -2438,14 +2619,26 @@
           <i class="fa-solid fa-volume-high text-xs"></i>
         </button>`;
 
+      // Só aparece quando há mesmo código que se possa mostrar num ecrã.
+      const botaoQuadro = (!isUser && temCodigoVisual(blocos)) ? `
+        <button type="button" class="btn-quadro self-end mb-1 p-1.5 rounded-lg text-brand-400 hover:text-brand-300 hover:bg-slate-800 transition-colors shrink-0" title="Abrir no quadro">
+          <i class="fa-solid fa-window-maximize text-xs"></i>
+        </button>` : "";
+
       div.innerHTML = `
         ${!isUser ? avatarHtml : ""}
         <div class="max-w-[80%] px-4 py-3 rounded-2xl ${isUser ? "bg-brand-600 text-white rounded-br-sm" : "bg-slate-900 text-slate-200 border border-slate-800 rounded-bl-sm"} shadow-md leading-relaxed">
           ${formatted}
         </div>
+        ${botaoQuadro}
         ${botaoLer}
         ${isUser ? avatarHtml : ""}
       `;
+
+      const quadro = div.querySelector(".btn-quadro");
+      if (quadro) {
+        quadro.addEventListener("click", () => abrirQuadro(montarDocumento(blocos), blocos));
+      }
 
       const ler = div.querySelector(".btn-ler");
       if (ler) {
@@ -2737,6 +2930,33 @@
         showToast("Ajustes bloqueados.");
       });
 
+      // --- Quadro ---
+      canvasFechar.addEventListener("click", fecharQuadro);
+      canvasTabVer.addEventListener("click", () => mostrarAbaQuadro("ver"));
+      canvasTabCod.addEventListener("click", () => mostrarAbaQuadro("cod"));
+      canvasAtualizar.addEventListener("click", desenharQuadro);
+      canvasCodigo.addEventListener("input", agendarDesenho);
+
+      canvasCopiar.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(canvasCodigo.value);
+          showToast("Código copiado.");
+        } catch (_) {
+          canvasCodigo.select();
+          showToast("Selecionado — use Ctrl+C.");
+        }
+      });
+
+      canvasDescarregar.addEventListener("click", () => {
+        const blob = new Blob([canvasCodigo.value], { type: "text/html;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "quadro-" + Date.now() + ".html";
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+
       passwordOk.addEventListener("click", validarCodigo);
       passwordCancelar.addEventListener("click", fecharPedidoCodigo);
       passwordInput.addEventListener("keydown", (e) => {
@@ -2778,7 +2998,9 @@
         if (e.target === settingsModal) settingsModal.classList.add("hidden");
       });
       document.addEventListener("keydown", (e) => {
-        if (e.key === "Escape") settingsModal.classList.add("hidden");
+        if (e.key !== "Escape") return;
+        if (!canvasOverlay.classList.contains("hidden")) { fecharQuadro(); return; }
+        settingsModal.classList.add("hidden");
       });
 
       presetPersonaFragoso.addEventListener("click", () => {
