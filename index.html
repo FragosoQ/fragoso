@@ -474,6 +474,8 @@
             Versão <strong id="app-versao" class="text-slate-400 font-mono">—</strong>
             <span class="mx-1">·</span>
             <button type="button" id="forcar-atualizacao" class="underline hover:text-brand-300 transition-colors">Forçar atualização</button>
+            <span class="mx-1">·</span>
+            <button type="button" id="bloquear-ajustes" class="underline hover:text-amber-300 transition-colors">Bloquear</button>
           </span>
           <button type="button" id="save-settings-btn" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors text-xs flex items-center gap-1.5">
             <i class="fa-solid fa-check"></i>
@@ -481,6 +483,29 @@
           </button>
         </div>
 
+      </div>
+    </div>
+
+    <!-- Pedido de código para entrar nos Ajustes -->
+    <div id="password-modal" class="hidden fixed inset-0 bg-slate-950/85 backdrop-blur-sm items-center justify-center p-4 z-50">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xs overflow-hidden shadow-2xl">
+        <div class="p-5 text-center">
+          <div class="w-12 h-12 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center mx-auto mb-3 text-brand-400">
+            <i class="fa-solid fa-lock"></i>
+          </div>
+          <h3 class="font-bold text-slate-100 text-sm mb-1">Ajustes protegidos</h3>
+          <p class="text-[11px] text-slate-400 mb-4">Escreva o código de acesso.</p>
+
+          <input type="password" id="password-input" inputmode="numeric" autocomplete="off"
+                 maxlength="32" placeholder="••••"
+                 class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-center text-lg tracking-[0.4em] text-white focus:outline-none focus:border-brand-500">
+          <p id="password-erro" class="hidden text-[11px] text-red-400 mt-2">Código errado.</p>
+
+          <div class="flex gap-2 mt-4">
+            <button type="button" id="password-cancelar" class="flex-1 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition-colors">Cancelar</button>
+            <button type="button" id="password-ok" class="flex-1 px-3 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-medium transition-colors">Entrar</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -494,7 +519,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v19";
+    const APP_VERSAO = "v22";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -558,6 +583,61 @@
         ? "O Space tem de ter acesso a este modelo pela Inference API."
         : "A escolha automática usa o primeiro modelo disponível.";
       modeloAviso.className = "text-[11px] text-slate-400 mt-1";
+    }
+
+    // ===== BLOQUEIO DOS AJUSTES =====
+    // ATENÇÃO: isto corre no browser, num ficheiro público. É um travão contra
+    // mexidas casuais — não é segurança. Quem abrir o código-fonte consegue
+    // contornar. Nunca guardar aqui nada que não possa ser visto.
+    // O código não está escrito em claro: fica só a sua impressão digital.
+    const AJUSTES_TRANCA = "mo55mw";
+
+    function impressao(texto) {
+      let h = 5381;
+      const base = "fragoso-bot:" + texto;
+      for (let i = 0; i < base.length; i++) {
+        h = ((h * 33) ^ base.charCodeAt(i)) >>> 0;
+      }
+      return h.toString(36);
+    }
+
+    // Fica destrancado até fechar o separador.
+    function ajustesDestrancados() {
+      return sessionStorage.getItem("chat_ajustes_ok") === "1";
+    }
+
+    function pedirCodigo() {
+      passwordInput.value = "";
+      passwordErro.classList.add("hidden");
+      passwordModal.classList.remove("hidden");
+      passwordModal.classList.add("flex");
+      setTimeout(() => passwordInput.focus(), 50);
+    }
+
+    function fecharPedidoCodigo() {
+      passwordModal.classList.add("hidden");
+      passwordModal.classList.remove("flex");
+      passwordInput.value = "";
+    }
+
+    function abrirAjustes() {
+      if (ajustesDestrancados()) {
+        settingsModal.classList.remove("hidden");
+        return;
+      }
+      pedirCodigo();
+    }
+
+    function validarCodigo() {
+      if (impressao(passwordInput.value.trim()) === AJUSTES_TRANCA) {
+        sessionStorage.setItem("chat_ajustes_ok", "1");
+        fecharPedidoCodigo();
+        settingsModal.classList.remove("hidden");
+        return;
+      }
+      passwordErro.classList.remove("hidden");
+      passwordInput.value = "";
+      passwordInput.focus();
     }
 
     function tokensPedido() {
@@ -632,7 +712,13 @@
     const settingApiUrl = document.getElementById("setting-api-url");
     const testApiBtn = document.getElementById("test-api-btn");
     const testApiOut = document.getElementById("test-api-out");
+    const passwordModal = document.getElementById("password-modal");
+    const passwordInput = document.getElementById("password-input");
+    const passwordErro = document.getElementById("password-erro");
+    const passwordOk = document.getElementById("password-ok");
+    const passwordCancelar = document.getElementById("password-cancelar");
     const appVersao = document.getElementById("app-versao");
+    const bloquearBtn = document.getElementById("bloquear-ajustes");
     const forcarAtualizacaoBtn = document.getElementById("forcar-atualizacao");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
@@ -2616,7 +2702,23 @@
         showToast("Histórico limpo.");
       });
 
-      openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
+      openSettingsBtn.addEventListener("click", abrirAjustes);
+
+      bloquearBtn.addEventListener("click", () => {
+        sessionStorage.removeItem("chat_ajustes_ok");
+        settingsModal.classList.add("hidden");
+        showToast("Ajustes bloqueados.");
+      });
+
+      passwordOk.addEventListener("click", validarCodigo);
+      passwordCancelar.addEventListener("click", fecharPedidoCodigo);
+      passwordInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") { e.preventDefault(); validarCodigo(); }
+        if (e.key === "Escape") fecharPedidoCodigo();
+      });
+      passwordModal.addEventListener("click", (e) => {
+        if (e.target === passwordModal) fecharPedidoCodigo();
+      });
       closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
       settingProvider.addEventListener("change", () => { updateProviderFieldsVisibility(); avisarSobreModelo(); });
       testSpaceBtn.addEventListener("click", testarLigacaoSpace);
