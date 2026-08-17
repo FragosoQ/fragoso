@@ -431,7 +431,12 @@
 
         </div>
 
-        <div class="p-4 bg-slate-900 border-t border-slate-800 flex justify-end gap-2">
+        <div class="p-4 bg-slate-900 border-t border-slate-800 flex justify-between items-center gap-3">
+          <span class="text-[10px] text-slate-500 shrink-0">
+            Versão <strong id="app-versao" class="text-slate-400 font-mono">—</strong>
+            <span class="mx-1">·</span>
+            <button type="button" id="forcar-atualizacao" class="underline hover:text-brand-300 transition-colors">Forçar atualização</button>
+          </span>
           <button type="button" id="save-settings-btn" class="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-medium transition-colors text-xs flex items-center gap-1.5">
             <i class="fa-solid fa-check"></i>
             <span>Guardar Alterações</span>
@@ -449,6 +454,10 @@
   </div>
 
   <script type="module">
+    // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
+    // se o ficheiro que está a correr é mesmo o mais recente.
+    const APP_VERSAO = "v15";
+
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
 
@@ -535,6 +544,8 @@
     const settingApiUrl = document.getElementById("setting-api-url");
     const testApiBtn = document.getElementById("test-api-btn");
     const testApiOut = document.getElementById("test-api-out");
+    const appVersao = document.getElementById("app-versao");
+    const forcarAtualizacaoBtn = document.getElementById("forcar-atualizacao");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
     const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
@@ -608,6 +619,9 @@
 
       // As vozes chegam de forma assíncrona; preenche o seletor assim que existirem.
       carregarVozes().then(preencherSelectVozes);
+
+      appVersao.textContent = APP_VERSAO;
+      console.info("Fragoso Bot", APP_VERSAO);
 
       // Deixa o toast disponível ao script do service worker
       window.appToast = showToast;
@@ -2482,6 +2496,26 @@
       settingProvider.addEventListener("change", updateProviderFieldsVisibility);
       testSpaceBtn.addEventListener("click", testarLigacaoSpace);
       testApiBtn.addEventListener("click", testarApi);
+
+      // Apaga o service worker e todas as caches, e recarrega do servidor.
+      // Resolve o caso "já substituí o ficheiro mas continuo a ver o antigo".
+      forcarAtualizacaoBtn.addEventListener("click", async () => {
+        forcarAtualizacaoBtn.textContent = "a limpar…";
+        try {
+          if ("serviceWorker" in navigator) {
+            const registos = await navigator.serviceWorker.getRegistrations();
+            await Promise.all(registos.map(r => r.unregister()));
+          }
+          if (window.caches) {
+            const chaves = await caches.keys();
+            await Promise.all(chaves.map(k => caches.delete(k)));
+          }
+        } catch (err) {
+          console.warn("limpeza incompleta:", err);
+        }
+        // Query string nova obriga o browser a ignorar a cache de HTTP.
+        location.replace(location.pathname + "?atualizado=" + Date.now());
+      });
 
       // Fechar os Ajustes com Escape ou clique fora
       settingsModal.addEventListener("click", (e) => {
