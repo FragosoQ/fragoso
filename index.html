@@ -159,9 +159,9 @@
       <canvas id="conversa-canvas" class="w-full max-w-md h-28 sm:h-36 mb-1"></canvas>
       <p id="conversa-aviso-mic" class="hidden text-[11px] text-amber-400 mb-2"></p>
 
-      <div class="w-full max-w-md min-h-[4.5rem] flex flex-col justify-start mt-4">
+      <div class="w-full max-w-lg min-h-[4.5rem] flex flex-col justify-start mt-4">
         <p id="conversa-parcial" class="text-sm sm:text-base text-slate-100 leading-relaxed break-words"></p>
-        <p id="conversa-resposta" class="text-xs text-slate-500 mt-2 leading-relaxed break-words"></p>
+        <div id="conversa-resposta" class="text-[13px] sm:text-sm text-slate-400 mt-2 leading-relaxed break-words text-left max-h-[30vh] overflow-y-auto px-1"></div>
       </div>
 
       <div class="mt-8 flex flex-col items-center gap-3">
@@ -1094,6 +1094,52 @@
       }, 2000);
     }
 
+    // Mostra a resposta completa no ecrã da conversa, dividida pelos mesmos
+    // pedaços em que vai ser falada, para poder acompanhar a leitura.
+    let spansResposta = [];
+
+    const CLASSE_RESPOSTA =
+      "text-[13px] sm:text-sm mt-2 leading-relaxed break-words text-left max-h-[30vh] overflow-y-auto px-1";
+
+    function mostrarRespostaNoOverlay(texto, comoErro) {
+      spansResposta = [];
+      conversaResposta.innerHTML = "";
+      conversaResposta.scrollTop = 0;
+      conversaResposta.className = CLASSE_RESPOSTA + (comoErro ? " text-amber-300" : " text-slate-400");
+
+      const limpo = comoErro ? String(texto) : semMarcacao(texto);
+      if (!limpo) return;
+
+      // Erro, ou TTS desligado: não há leitura a acompanhar, texto corrido.
+      if (comoErro || !state.textToSpeech) {
+        conversaResposta.textContent = limpo;
+        return;
+      }
+
+      for (const pedaco of partirEmPedacos(limpo)) {
+        const span = document.createElement("span");
+        span.textContent = pedaco + " ";
+        span.className = "transition-colors duration-200 text-slate-500";
+        conversaResposta.appendChild(span);
+        spansResposta.push(span);
+      }
+    }
+
+    function destacarPedaco(indice) {
+      spansResposta.forEach((span, i) => {
+        span.className = "transition-colors duration-200 " +
+          (i === indice ? "text-slate-100 font-medium"
+                        : i < indice ? "text-slate-600" : "text-slate-500");
+      });
+      const atual = spansResposta[indice];
+      if (atual && conversaResposta.scrollHeight > conversaResposta.clientHeight) {
+        // scrollIntoView moveria a página toda; ajustar só a caixa.
+        const alvo = atual.offsetTop - conversaResposta.offsetTop
+                   - conversaResposta.clientHeight / 2 + atual.offsetHeight / 2;
+        conversaResposta.scrollTo({ top: Math.max(0, alvo), behavior: "smooth" });
+      }
+    }
+
     function despedir(textoDito) {
       appendMessage("user", textoDito);
       const adeus = state.speechLang.startsWith("en")
@@ -1145,6 +1191,9 @@
         conversa.ttsForcado = true;
       }
 
+      // O texto no ecrã acompanha a frase que está a ser lida.
+      fala.aoFalarPedaco = (i) => { if (conversa.ativa) destacarPedaco(i); };
+
       definirEstadoConversa("pausa", "A abrir o microfone…");
       desenharOnda();
       iniciarVigia();
@@ -1158,6 +1207,7 @@
     function sairModoConversa(mensagem, comoErro) {
       if (!conversa.ativa) return;
       conversa.ativa = false;
+      fala.aoFalarPedaco = null;
       clearInterval(conversa.vigia);
       conversa.vigia = null;
       conversa.paradoDesde = 0;
@@ -1287,7 +1337,11 @@
 
     // Estado próprio da fala. NÃO confiar em speechSynthesis.speaking: no Chrome
     // essa flag fica presa a true quando o motor encrava, e nada mais é falado.
-    const fala = { ativa: false, fila: [], bomba: null, guarda: null, sonda: null };
+    const fala = {
+      ativa: false, fila: [], pedacos: [], indice: -1,
+      bomba: null, guarda: null, sonda: null,
+      aoPreparar: null, aoFalarPedaco: null
+    };
 
     // O Chrome corta a fala por volta dos 15 segundos e depois bloqueia.
     // Partir em frases curtas e encadeá-las evita o problema por completo.
@@ -1333,9 +1387,12 @@
       }
 
       pararFala();
-      fala.fila = partirEmPedacos(text);
+      fala.pedacos = partirEmPedacos(text);
+      fala.fila = fala.pedacos.slice();
+      fala.indice = -1;
       if (!fala.fila.length) return;
       fala.ativa = true;
+      if (fala.aoPreparar) fala.aoPreparar(fala.pedacos);
 
       // O Chrome suspende a síntese sozinho em separadores longos; este "empurrão"
       // periódico mantém-na viva. Inofensivo nos outros browsers.
@@ -1348,6 +1405,8 @@
         if (!fala.ativa) return;
         const pedaco = fala.fila.shift();
         if (pedaco === undefined) { pararFala(); return; }
+        fala.indice++;
+        if (fala.aoFalarPedaco) fala.aoFalarPedaco(fala.indice);
 
         const u = new SpeechSynthesisUtterance(pedaco);
         // A ordem importa: primeiro a voz, depois o lang.
@@ -1734,7 +1793,7 @@
 
         typingEl.remove();
         appendMessage("assistant", botReply);
-        if (conversa.ativa) conversaResposta.textContent = semMarcacao(botReply).slice(0, 280);
+        if (conversa.ativa) mostrarRespostaNoOverlay(botReply);
         speakBotResponse(botReply);
 
         state.messages.push({ role: "user", content: userText });
@@ -1744,7 +1803,7 @@
       } catch (err) {
         typingEl.remove();
         appendMessage("assistant", `⚠️ **Erro na conexão:** ${err.message}`);
-        if (conversa.ativa) conversaResposta.textContent = "⚠️ " + err.message.slice(0, 240);
+        if (conversa.ativa) mostrarRespostaNoOverlay("⚠️ " + err.message, true);
         // O toast é uma linha; o detalhe completo fica na mensagem do chat.
         showToast(err.message.split("\n")[0], "error");
       } finally {
