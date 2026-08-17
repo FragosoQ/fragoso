@@ -346,11 +346,14 @@
               <span>Ativar reconhecimento de voz (microfone)</span>
             </label>
             
-            <label class="flex items-center gap-2 text-slate-300 mb-3 cursor-pointer">
-              <input type="checkbox" id="setting-text-to-speech" class="rounded text-brand-500 cursor-pointer" />
-              <span>O bot fala as respostas (TTS)</span>
-            </label>
-            
+            <label class="block text-slate-300 mb-1 mt-3">Quando é que o bot fala</label>
+            <select id="setting-leitura" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500 text-sm">
+              <option value="conversa">Só no modo conversa</option>
+              <option value="sempre">Sempre que responde</option>
+            </select>
+            <p class="text-[11px] text-slate-400 mt-1">Em «Só no modo conversa», perguntas escritas nunca são lidas em voz alta. Pode sempre ouvir uma resposta à parte, no altifalante ao lado dela.</p>
+
+
             <label class="block text-slate-300 mb-1">Idioma da Fala</label>
             <select id="setting-speech-lang" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500 text-sm">
               <option value="pt-PT">Português (Portugal)</option>
@@ -519,7 +522,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v22";
+    const APP_VERSAO = "v23";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -667,7 +670,7 @@
       isLoading: false,
       gradioClient: null,
       speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
-      textToSpeech: localStorage.getItem("chat_text_to_speech") === "true",
+      leituraModo: localStorage.getItem("chat_leitura") || "conversa",
       speechLang: localStorage.getItem("chat_speech_lang") || "pt-PT",
       speechVoice: localStorage.getItem("chat_speech_voice") || "",
       conversaPausa: parseFloat(localStorage.getItem("chat_conversa_pausa") || "1.5"),
@@ -735,7 +738,7 @@
     const statusIndicator = document.getElementById("status-indicator");
     const appTitleDisplay = document.getElementById("app-title-display");
     const settingSpeechRecognition = document.getElementById("setting-speech-recognition");
-    const settingTextToSpeech = document.getElementById("setting-text-to-speech");
+    const settingLeitura = document.getElementById("setting-leitura");
     const settingSpeechLang = document.getElementById("setting-speech-lang");
     const settingSpeechRate = document.getElementById("setting-speech-rate");
     const speechRateDisplay = document.getElementById("speech-rate-display");
@@ -774,7 +777,7 @@
       preencherEscolhaModelo();
       settingPesquisa.value = state.pesquisa;
       settingSpeechRecognition.checked = state.speechRecognition;
-      settingTextToSpeech.checked = state.textToSpeech;
+      settingLeitura.value = state.leituraModo;
       settingSpeechLang.value = state.speechLang;
       settingSpeechRate.value = state.speechRate;
       speechRateDisplay.textContent = state.speechRate.toFixed(1) + "x";
@@ -1307,7 +1310,7 @@
       if (!limpo) return;
 
       // Erro, ou TTS desligado: não há leitura a acompanhar, texto corrido.
-      if (comoErro || !state.textToSpeech) {
+      if (comoErro || !deveLerAutomaticamente()) {
         conversaResposta.textContent = limpo;
         return;
       }
@@ -1349,7 +1352,7 @@
       updateMessageCounter();
 
       // sairModoConversa repõe o TTS ao estado guardado; ler a intenção antes.
-      const deveFalar = state.textToSpeech;
+      const deveFalar = deveLerAutomaticamente();
       sairModoConversa(null, false);
       if (deveFalar) speakText(adeus);
     }
@@ -1381,12 +1384,6 @@
         welcomeCard.classList.add("hidden");
       }
 
-      // O modo conversa implica falar as respostas, sem alterar a preferência guardada.
-      if (!state.textToSpeech) {
-        state.textToSpeech = true;
-        conversa.ttsForcado = true;
-      }
-
       // O texto no ecrã acompanha a frase que está a ser lida.
       fala.aoFalarPedaco = (i) => { if (conversa.ativa) destacarPedaco(i); };
 
@@ -1410,11 +1407,6 @@
       pararEscuta();
       pararVisualizador();
       conversa.buffer = "";
-
-      if (conversa.ttsForcado) {
-        state.textToSpeech = false;
-        conversa.ttsForcado = false;
-      }
 
       conversaOverlay.classList.add("hidden");
       conversaOverlay.classList.remove("flex");
@@ -1809,6 +1801,12 @@
       });
     }
 
+    // Regra única de quando falar. Fora do modo conversa, o padrão é NÃO falar:
+    // uma pergunta escrita no metro não pode disparar som sem aviso.
+    function deveLerAutomaticamente() {
+      return conversa.ativa || state.leituraModo === "sempre";
+    }
+
     // Tira a marcação: senão o sintetizador lê "cardinal cardinal Passos"
     // e "asterisco asterisco" em cada título e negrito.
     function semMarcacao(texto) {
@@ -1828,7 +1826,7 @@
 
     // Função para falar a resposta do bot (chamada após receber resposta)
     function speakBotResponse(text) {
-      if (state.textToSpeech && speechSynthesis && text.trim()) {
+      if (deveLerAutomaticamente() && speechSynthesis && text.trim()) {
         // Antes havia aqui um limite de 1000 caracteres: respostas longas eram
         // simplesmente ignoradas, sem aviso. Já não é preciso — o texto é
         // partido em frases curtas e nada fica por dizer.
@@ -2433,13 +2431,42 @@
         ? `<div class="w-8 h-8 rounded-xl bg-slate-800 flex items-center justify-center text-slate-300 shrink-0"><i class="fa-solid fa-user text-xs"></i></div>`
         : `<div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shrink-0 shadow-md"><i class="fa-solid fa-robot text-xs"></i></div>`;
 
+      // Botão de leitura por resposta: ouvir à vontade, sem ligar a leitura
+      // automática. Serve para o caso "estou no metro, não quero som agora".
+      const botaoLer = isUser ? "" : `
+        <button type="button" class="btn-ler self-end mb-1 p-1.5 rounded-lg text-slate-600 hover:text-brand-300 hover:bg-slate-800 transition-colors shrink-0" title="Ouvir esta resposta">
+          <i class="fa-solid fa-volume-high text-xs"></i>
+        </button>`;
+
       div.innerHTML = `
         ${!isUser ? avatarHtml : ""}
         <div class="max-w-[80%] px-4 py-3 rounded-2xl ${isUser ? "bg-brand-600 text-white rounded-br-sm" : "bg-slate-900 text-slate-200 border border-slate-800 rounded-bl-sm"} shadow-md leading-relaxed">
           ${formatted}
         </div>
+        ${botaoLer}
         ${isUser ? avatarHtml : ""}
       `;
+
+      const ler = div.querySelector(".btn-ler");
+      if (ler) {
+        const original = String(text || "");
+        ler.addEventListener("click", () => {
+          // Segundo clique no mesmo botão cala.
+          if (fala.ativa) {
+            pararFala();
+            ler.querySelector("i").className = "fa-solid fa-volume-high text-xs";
+            return;
+          }
+          ler.querySelector("i").className = "fa-solid fa-stop text-xs";
+          speakText(semMarcacao(original));
+          const vigiar = setInterval(() => {
+            if (!fala.ativa) {
+              clearInterval(vigiar);
+              ler.querySelector("i").className = "fa-solid fa-volume-high text-xs";
+            }
+          }, 300);
+        });
+      }
 
       messagesContainer.appendChild(div);
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -2778,7 +2805,7 @@
         state.pesquisa = settingPesquisa.value;
         state.speechRecognition = settingSpeechRecognition.checked;
         // Durante o modo conversa o TTS está forçado; guardar não o pode desligar.
-        state.textToSpeech = conversa.ttsForcado ? true : settingTextToSpeech.checked;
+        state.leituraModo = settingLeitura.value;
         state.speechLang = settingSpeechLang.value;
         state.speechVoice = settingSpeechVoice.value;
         state.speechRate = parseFloat(settingSpeechRate.value);
@@ -2805,7 +2832,7 @@
         localStorage.setItem("chat_modelo", state.modelo);
         localStorage.setItem("chat_pesquisa", state.pesquisa);
         localStorage.setItem("chat_speech_recognition", state.speechRecognition);
-        localStorage.setItem("chat_text_to_speech", state.textToSpeech);
+        localStorage.setItem("chat_leitura", state.leituraModo);
         localStorage.setItem("chat_speech_lang", state.speechLang);
         localStorage.setItem("chat_speech_voice", state.speechVoice);
         localStorage.setItem("chat_speech_rate", state.speechRate);
