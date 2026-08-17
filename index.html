@@ -165,10 +165,16 @@
       </div>
 
       <div class="mt-8 flex flex-col items-center gap-3">
-        <button type="button" id="conversa-sair-btn" class="px-5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 text-sm font-medium transition-colors flex items-center gap-2">
-          <i class="fa-solid fa-stop text-xs"></i>
-          <span>Terminar</span>
-        </button>
+        <div class="flex items-center gap-2">
+          <button type="button" id="conversa-saltar-btn" class="hidden px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-sm font-medium transition-colors items-center gap-2">
+            <i class="fa-solid fa-forward text-xs"></i>
+            <span>Saltar fala</span>
+          </button>
+          <button type="button" id="conversa-sair-btn" class="px-5 py-2.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 text-red-300 border border-red-500/30 text-sm font-medium transition-colors flex items-center gap-2">
+            <i class="fa-solid fa-stop text-xs"></i>
+            <span>Terminar</span>
+          </button>
+        </div>
         <span class="text-[11px] text-slate-500">ou diga <strong id="conversa-frase" class="text-brand-300">"até amanhã"</strong></span>
       </div>
 
@@ -446,7 +452,28 @@
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
 
-    const DEFAULT_FRAGOSO_PROMPT = "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, bem-humorado, levemente irónico e extremamente prático. Fala de forma natural e descomplicada, sem enrolação académica ou formalismos excessivos. Resolve o problema primeiro e nunca peças desculpas desnecessárias.";
+    const PROMPT_FRAGOSO_ANTIGO = "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, bem-humorado, levemente irónico e extremamente prático. Fala de forma natural e descomplicada, sem enrolação académica ou formalismos excessivos. Resolve o problema primeiro e nunca peças desculpas desnecessárias.";
+
+    const DEFAULT_FRAGOSO_PROMPT =
+      "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, bem-humorado, " +
+      "levemente irónico e extremamente prático.\n" +
+      "Escreves SEMPRE em português europeu (de Portugal). Nunca uses português do Brasil: " +
+      "trata por tu, e não uses \"você\", \"gerundismo\" nem vocabulário brasileiro.\n" +
+      "Resolve o problema primeiro, sem enrolação académica nem formalismos.\n" +
+      "Se a pergunta tiver um termo que não reconheças, pergunta o que se quis dizer em vez " +
+      "de inventar uma explicação — pode ter sido um erro de transcrição de voz.\n" +
+      "Nunca peças desculpas desnecessárias.";
+
+    // Instrução extra só no modo conversa: respostas faladas têm de ser curtas.
+    const INSTRUCAO_VOZ =
+      "\n\nESTA CONVERSA É POR VOZ. Responde em 2 a 4 frases curtas, em texto corrido. " +
+      "Nada de listas, títulos, numeração ou markdown — vai ser lido em voz alta. " +
+      "Se o assunto for extenso, dá o essencial e pergunta se queres que aprofunde.";
+
+    function promptEfetivo() {
+      const base = state.systemPrompt || DEFAULT_FRAGOSO_PROMPT;
+      return conversa.ativa ? base + INSTRUCAO_VOZ : base;
+    }
 
     const state = {
       messages: [],
@@ -471,6 +498,13 @@
       speechRate: parseFloat(localStorage.getItem("chat_speech_rate") || "1.0"),
       isListening: false
     };
+
+    // Migração: quem tinha guardado o prompt antigo recebe o novo, que exige
+    // português de Portugal. Prompts personalizados ficam intactos.
+    if (state.systemPrompt.trim() === PROMPT_FRAGOSO_ANTIGO.trim()) {
+      state.systemPrompt = DEFAULT_FRAGOSO_PROMPT;
+      localStorage.setItem("chat_system_prompt", state.systemPrompt);
+    }
 
     let toastTimer = null;
 
@@ -531,6 +565,7 @@
     const conversaDot = document.getElementById("conversa-dot");
     const conversaFrase = document.getElementById("conversa-frase");
     const conversaSairBtn = document.getElementById("conversa-sair-btn");
+    const conversaSaltarBtn = document.getElementById("conversa-saltar-btn");
     const settingConversaPausa = document.getElementById("setting-conversa-pausa");
     const conversaPausaDisplay = document.getElementById("conversa-pausa-display");
     const settingFraseFim = document.getElementById("setting-frase-fim");
@@ -861,6 +896,10 @@
       conversaDot.className = `relative inline-flex rounded-full h-2.5 w-2.5 ${e.cor}`;
       conversaPulse.className = `absolute inline-flex h-full w-full rounded-full ${e.cor}${e.pulsar ? " pulso" : ""}`;
       if (chave !== "ouvir") conversaParcial.textContent = "";
+
+      // "Saltar fala" só faz sentido enquanto o bot está a responder.
+      conversaSaltarBtn.classList.toggle("hidden", chave !== "falar");
+      conversaSaltarBtn.classList.toggle("flex", chave === "falar");
     }
 
     // Compara ignorando acentuação, pontuação e maiúsculas.
@@ -1479,6 +1518,12 @@
       conversaCtaBtn.addEventListener("click", entrarModoConversa);
       conversaSairBtn.addEventListener("click", () => sairModoConversa("Modo conversa terminado.", false));
 
+      // Cortar uma resposta longa e voltar a ouvir de imediato.
+      conversaSaltarBtn.addEventListener("click", () => {
+        pararFala();
+        iniciarEscuta();
+      });
+
       settingConversaPausa.addEventListener("input", (e) => {
         conversaPausaDisplay.textContent = (parseFloat(e.target.value) || 1.5).toFixed(1) + "s";
       });
@@ -1509,11 +1554,18 @@
       });
     }
 
-    // Tira a marcação para não ler "asterisco asterisco" nem a mostrar no overlay
+    // Tira a marcação: senão o sintetizador lê "cardinal cardinal Passos"
+    // e "asterisco asterisco" em cada título e negrito.
     function semMarcacao(texto) {
       return String(texto || "")
+        .replace(/```[\s\S]*?```/g, ". Bloco de código omitido. ")
+        .replace(/^#{1,6}\s*/gm, "")            // títulos ###
+        .replace(/^\s*[-*+]\s+/gm, "")          // marcas de lista
+        .replace(/^\s*\d+\.\s+/gm, "")          // listas numeradas
         .replace(/\*\*(.*?)\*\*/g, "$1")
+        .replace(/\*([^*\n]+)\*/g, "$1")
         .replace(/`([^`]+)`/g, "$1")
+        .replace(/^\s*[-—_]{3,}\s*$/gm, " ")    // separadores
         .replace(/<[^>]+>/g, "")
         .replace(/\s+/g, " ")
         .trim();
@@ -1522,8 +1574,11 @@
     // Função para falar a resposta do bot (chamada após receber resposta)
     function speakBotResponse(text) {
       if (state.textToSpeech && speechSynthesis && text.trim()) {
+        // Antes havia aqui um limite de 1000 caracteres: respostas longas eram
+        // simplesmente ignoradas, sem aviso. Já não é preciso — o texto é
+        // partido em frases curtas e nada fica por dizer.
         const cleanText = semMarcacao(text);
-        if (cleanText.length > 0 && cleanText.length < 1000) {
+        if (cleanText.length > 0) {
           speakText(cleanText);
         }
       }
@@ -1640,7 +1695,7 @@
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
-                system_prompt: state.systemPrompt,
+                system_prompt: promptEfetivo(),
                 history: historicoMensagens(),
                 message: userText
               })
@@ -1803,7 +1858,7 @@
 
       if (pTexto) args[nomeParam(pTexto)] = userText;
       if (pHist) args[nomeParam(pHist)] = historico;
-      if (pSistema) args[nomeParam(pSistema)] = state.systemPrompt;
+      if (pSistema) args[nomeParam(pSistema)] = promptEfetivo();
 
       // Restantes obrigatórios: usa o default declarado ou um valor neutro do tipo certo.
       for (const p of params) {
