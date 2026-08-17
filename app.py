@@ -38,6 +38,8 @@ except Exception:
     pass
 
 
+VERSAO_APP = "v18"  # confirmar na página do Space que é esta
+
 MODELOS_OMISSAO = [
     "Qwen/Qwen2.5-72B-Instruct",
     "meta-llama/Llama-3.3-70B-Instruct",
@@ -89,15 +91,22 @@ def contexto_temporal():
     except Exception:
         agora = datetime.now(timezone.utc)
 
+    meses = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho",
+             "agosto", "setembro", "outubro", "novembro", "dezembro"]
+    data_extenso = f"{agora.day} de {meses[agora.month - 1]} de {agora.year}"
+
     return (
-        f"\n\nCONTEXTO TEMPORAL: hoje é {agora.strftime('%d/%m/%Y')}. "
-        "Este é o presente, não o futuro. "
-        "O teu treino terminou numa data anterior, por isso não conheces "
-        "acontecimentos recentes. Quando te perguntarem sobre factos que podem "
-        "ter mudado — plantéis, transferências, resultados, preços, cargos, "
-        "notícias, versões de software — responde assim: diz em que data termina "
-        "o teu conhecimento, dá o que sabias nessa altura, e avisa que pode estar "
-        "desatualizado. NUNCA digas que uma data já passada ou atual está no futuro."
+        "### DATA DE HOJE (informação do sistema, tem prioridade sobre o teu treino)\n"
+        f"Hoje é {data_extenso} ({agora.strftime('%d/%m/%Y')}). "
+        f"O ano corrente é {agora.year}.\n"
+        f"Se te perguntarem em que ano/dia estamos, responde {agora.year} — "
+        "nunca o ano em que o teu treino terminou.\n"
+        "O teu conhecimento foi congelado numa data anterior a esta, por isso não "
+        "conheces acontecimentos recentes. Sobre factos que podem ter mudado "
+        "(plantéis, transferências, resultados, preços, cargos, notícias, versões "
+        "de software): diz até quando sabes, dá o que sabias, e avisa que pode "
+        f"estar desatualizado. Nunca trates {agora.year} nem anos anteriores como futuro.\n\n"
+        "### PERSONALIDADE\n"
     )
 
 
@@ -230,7 +239,8 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
 
     escolhido = (modelo or "").strip()
     raciocinio = eh_modelo_raciocinio(escolhido)
-    persona = (system_prompt or PROMPT_OMISSAO).strip() + contexto_temporal()
+    # A data vai à frente: instruções no início do system prompt pesam mais.
+    persona = contexto_temporal() + (system_prompt or PROMPT_OMISSAO).strip()
     pergunta = str(message).strip()
 
     # --- Pesquisa web -------------------------------------------------------
@@ -358,12 +368,40 @@ def _kwargs_formato_mensagens(componente):
     return {"type": "messages"} if "type" in inspect.signature(componente.__init__).parameters else {}
 
 
+def estado_do_space():
+    """Painel de diagnóstico. Se esta caixa não aparecer na página do Space,
+    o ficheiro app.py que lá está é antigo."""
+    try:
+        from zoneinfo import ZoneInfo
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+    except Exception:
+        agora = datetime.now(timezone.utc)
+
+    try:
+        from ddgs import DDGS  # noqa: F401
+        pesquisa = "instalada"
+    except Exception:
+        try:
+            from duckduckgo_search import DDGS  # noqa: F401
+            pesquisa = "instalada (pacote antigo)"
+        except Exception:
+            pesquisa = "**EM FALTA** — acrescente `ddgs` ao requirements.txt"
+
+    token = "configurado" if HF_TOKEN else "**EM FALTA** — ver Settings → Secrets"
+
+    return (
+        f"**Versão {VERSAO_APP}** · Data vista pelo Space: **{agora.strftime('%d/%m/%Y %H:%M')}** · "
+        f"Token: {token} · Pesquisa web: {pesquisa}"
+    )
+
+
 with gr.Blocks(title="Fragoso Bot") as demo:
     gr.Markdown(
         "# Fragoso Bot\n"
         "Cérebro do assistente. Esta página serve para testar — "
         "a app do browser liga-se ao endpoint `/chat`."
     )
+    estado_md = gr.Markdown()
 
     conversa = gr.Chatbot(height=420, label="Conversa", **_kwargs_formato_mensagens(gr.Chatbot))
     caixa = gr.Textbox(placeholder="Escreva e carregue Enter…", label="Mensagem", lines=2)
@@ -389,6 +427,8 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     saidas = [conversa, caixa]
 
     # api_name=False: pertencem à interface humana, não à API pública.
+    demo.load(estado_do_space, None, estado_md, api_name=False)
+
     caixa.submit(_enviar_ui, entradas, saidas, api_name=False)
     enviar.click(_enviar_ui, entradas, saidas, api_name=False)
     limpar.click(lambda: ([], ""), None, saidas, api_name=False)
