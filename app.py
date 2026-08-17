@@ -1,4 +1,3 @@
-
 """Fragoso Bot — cérebro do assistente.
 
 Substitui o app.py do Space Fragoso82/fragoso.
@@ -17,9 +16,11 @@ Configuração no Space (Settings):
   - Variables -> PROMPT   = personalidade por omissão (opcional)
 """
 
+import concurrent.futures
 import inspect
 import os
 import re
+import traceback
 from datetime import datetime, timezone
 
 import gradio as gr
@@ -39,7 +40,7 @@ except Exception:
     pass
 
 
-VERSAO_APP = "v20"  # confirmar na página do Space que é esta
+VERSAO_APP = "v21"  # confirmar na página do Space que é esta
 
 MODELOS_OMISSAO = [
     "Qwen/Qwen2.5-72B-Instruct",
@@ -117,6 +118,7 @@ def contexto_temporal():
 # o presente, procura-se primeiro e responde-se com base nos resultados.
 
 RESULTADOS_PESQUISA = 5
+TEMPO_MAX_PESQUISA = 8  # segundos; passa à frente em vez de bloquear
 
 # Sinais de que a pergunta é sobre o presente e o treino não chega.
 PADRAO_ATUALIDADE = re.compile(
@@ -239,6 +241,59 @@ def filtrar_relevantes(consulta, resultados):
     return [r for _, r in pontuados]
 
 
+def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
+    """Devolve [{titulo, url, resumo}]. Lista vazia se falhar — nunca levanta."""
+    try:
+        from ddgs import DDGS
+    except Exception:
+        try:
+            from duckduckgo_search import DDGS  # nome antigo do pacote
+        except Exception:
+            return []
+
+    def procurar(termo):
+        for regiao in ("pt-pt", "wt-wt"):
+            try:
+                with DDGS() as motor:
+                    brutos = list(motor.text(termo[:300], region=regiao, max_results=n * 2))
+            except Exception:
+                brutos = []
+            if brutos:
+                saida = []
+                for r in brutos:
+                    titulo = (r.get("title") or "").strip()
+                    url = (r.get("href") or r.get("url") or "").strip()
+                    resumo = (r.get("body") or r.get("snippet") or "").strip()
+                    if titulo and url:
+                        saida.append({"titulo": titulo, "url": url, "resumo": resumo[:400]})
+                return saida
+        return []
+
+    def tentar_tudo():
+        termo = construir_consulta(consulta)
+        achados = filtrar_relevantes(termo, procurar(termo))
+
+        # Nada relevante à primeira: repetir só com nomes próprios e números.
+        # "Constituição equipa Sporting Clube Portugal 2026" -> "Sporting Clube Portugal 2026"
+        if not achados:
+            fortes = termos_distintivos(termo)
+            if len(fortes) >= 2:
+                termo2 = " ".join(fortes)
+                if termo2.lower() != termo.lower():
+                    achados = filtrar_relevantes(termo2, procurar(termo2))
+        return achados
+
+    # Teto de tempo: um motor de busca lento não pode bloquear a resposta toda.
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            relevantes = executor.submit(tentar_tudo).result(timeout=TEMPO_MAX_PESQUISA)
+    except Exception:
+        traceback.print_exc()
+        relevantes = []
+
+    return relevantes[:n]
+
+
 def contexto_pesquisa(resultados):
     """Transforma os resultados em texto para o modelo, com fontes numeradas."""
     linhas = [
@@ -292,6 +347,26 @@ def normalizar_historico(history):
 
 def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024,
               modelo=None, pesquisar="auto"):
+    """Invólucro público. Nunca levanta exceções.
+
+    Se algo rebentar aqui dentro, o Gradio devolve apenas "An error occurred"
+    ao browser — inútil para perceber o que falhou. Preferimos devolver uma
+    mensagem legível e deixar o traceback nos logs do Space.
+    """
+    try:
+        return _responder(message, history, system_prompt, temperatura,
+                          max_tokens, modelo, pesquisar)
+    except Exception as err:
+        traceback.print_exc()  # aparece em Space -> Logs
+        return (
+            "Erro interno no Space: "
+            f"{type(err).__name__}: {str(err)[:300]}\n\n"
+            "O detalhe completo está no separador Logs do Space."
+        )
+
+
+def _responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024,
+               modelo=None, pesquisar="auto"):
     """Uma volta da conversa. É esta função que a app do browser chama."""
     global _modelo_bom
 
