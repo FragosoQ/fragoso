@@ -401,6 +401,18 @@
             </div>
           </div>
 
+          <!-- Comprimento das respostas -->
+          <div>
+            <label class="block font-semibold text-slate-200 mb-1">Comprimento máximo da resposta</label>
+            <select id="setting-max-tokens" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500">
+              <option value="512">Curta — 512 tokens (~1 400 caracteres)</option>
+              <option value="1024">Normal — 1 024 tokens (~2 800 caracteres)</option>
+              <option value="2048">Longa — 2 048 tokens (~5 600 caracteres)</option>
+              <option value="4096">Muito longa — 4 096 tokens (~11 000 caracteres)</option>
+            </select>
+            <p class="text-[11px] text-slate-400 mt-1">Se as respostas ficarem cortadas a meio de uma frase, é este o limite a subir. Respostas maiores demoram mais e gastam mais quota.</p>
+          </div>
+
           <!-- Nome Personalizado do Robô -->
           <div>
             <label class="block font-semibold text-slate-200 mb-1">Nome de Exibição do Assistente</label>
@@ -456,7 +468,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v15";
+    const APP_VERSAO = "v16";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -479,6 +491,20 @@
       "Nada de listas, títulos, numeração ou markdown — vai ser lido em voz alta. " +
       "Se o assunto for extenso, dá o essencial e pergunta se queres que aprofunde.";
 
+    // No modo conversa pedimos 2 a 4 frases, por isso não faz sentido reservar
+    // milhares de tokens: encurta a espera e poupa quota.
+    // Uma resposta que acaba sem pontuação final e já é longa foi quase de
+    // certeza interrompida pelo limite de tokens do modelo.
+    function pareceTruncada(texto) {
+      const t = String(texto || "").trim();
+      if (t.length < 200) return false;
+      return !/[.!?…:;)"'\]}»]$/.test(t);
+    }
+
+    function tokensPedido() {
+      return conversa.ativa ? Math.min(state.maxTokens, 400) : state.maxTokens;
+    }
+
     function promptEfetivo() {
       const base = state.systemPrompt || DEFAULT_FRAGOSO_PROMPT;
       return conversa.ativa ? base + INSTRUCAO_VOZ : base;
@@ -496,6 +522,7 @@
       apiUrl: localStorage.getItem("chat_api_url") || "http://localhost:8000/api/chat",
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
+      maxTokens: parseInt(localStorage.getItem("chat_max_tokens") || "1024", 10) || 1024,
       isLoading: false,
       gradioClient: null,
       speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
@@ -548,6 +575,7 @@
     const forcarAtualizacaoBtn = document.getElementById("forcar-atualizacao");
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
+    const settingMaxTokens = document.getElementById("setting-max-tokens");
     const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
     const presetPersonaTecnico = document.getElementById("preset-persona-tecnico");
     const fieldHfSpace = document.getElementById("field-hf-space");
@@ -591,6 +619,7 @@
       settingApiUrl.value = state.apiUrl;
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
+      settingMaxTokens.value = String(state.maxTokens);
       settingSpeechRecognition.checked = state.speechRecognition;
       settingTextToSpeech.checked = state.textToSpeech;
       settingSpeechLang.value = state.speechLang;
@@ -1770,7 +1799,8 @@
               body: JSON.stringify({
                 system_prompt: promptEfetivo(),
                 history: historicoMensagens(),
-                message: userText
+                message: userText,
+                max_tokens: tokensPedido()
               })
             });
           } catch (err) {
@@ -1806,6 +1836,12 @@
         }
 
         typingEl.remove();
+
+        // Resposta interrompida a meio: quase de certeza bateu no limite de tokens.
+        if (pareceTruncada(botReply)) {
+          showToast("Resposta cortada pelo limite. Suba o \"Comprimento máximo\" nos Ajustes.", "error");
+        }
+
         appendMessage("assistant", botReply);
         if (conversa.ativa) mostrarRespostaNoOverlay(botReply);
         speakBotResponse(botReply);
@@ -1933,6 +1969,11 @@
       if (pHist) args[nomeParam(pHist)] = historico;
       if (pSistema) args[nomeParam(pSistema)] = promptEfetivo();
 
+      // Estes têm valor por omissão no Space, mas quem manda é a definição do
+      // utilizador. Sem isto, o limite escolhido nos Ajustes era ignorado.
+      const pTokens = apanhar(PADRAO.maxTokens);
+      if (pTokens) args[nomeParam(pTokens)] = tokensPedido();
+
       // Restantes obrigatórios: usa o default declarado ou um valor neutro do tipo certo.
       for (const p of params) {
         if (usados.has(p)) continue;
@@ -1944,7 +1985,7 @@
         }
         const t = tipoParam(p);
         if (PADRAO.temperatura.test(nome)) args[nome] = 0.7;
-        else if (PADRAO.maxTokens.test(nome)) args[nome] = 512;
+        else if (PADRAO.maxTokens.test(nome)) args[nome] = tokensPedido();
         else if (PADRAO.topP.test(nome)) args[nome] = 0.95;
         else if (PADRAO.topK.test(nome)) args[nome] = 50;
         else if (PADRAO.penal.test(nome)) args[nome] = 1.0;
@@ -2544,6 +2585,7 @@
         state.apiUrl = settingApiUrl.value.trim();
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
+        state.maxTokens = parseInt(settingMaxTokens.value, 10) || 1024;
         state.speechRecognition = settingSpeechRecognition.checked;
         // Durante o modo conversa o TTS está forçado; guardar não o pode desligar.
         state.textToSpeech = conversa.ttsForcado ? true : settingTextToSpeech.checked;
@@ -2569,6 +2611,7 @@
         localStorage.setItem("chat_api_url", state.apiUrl);
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
+        localStorage.setItem("chat_max_tokens", state.maxTokens);
         localStorage.setItem("chat_speech_recognition", state.speechRecognition);
         localStorage.setItem("chat_text_to_speech", state.textToSpeech);
         localStorage.setItem("chat_speech_lang", state.speechLang);

@@ -44,7 +44,8 @@ MODELOS_OMISSAO = [
 ]
 
 MODELOS = [m.strip() for m in os.getenv("MODELO", "").split(",") if m.strip()] or MODELOS_OMISSAO
-MAX_HISTORICO = 20  # mensagens enviadas ao modelo (limita custo e latência)
+MAX_HISTORICO = 20      # mensagens enviadas ao modelo (limita custo e latência)
+MAX_TOKENS_TETO = 4096  # teto absoluto, mesmo que a app peça mais
 
 PROMPT_OMISSAO = os.getenv(
     "PROMPT",
@@ -77,7 +78,7 @@ def normalizar_historico(history):
     return saida[-MAX_HISTORICO:]
 
 
-def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=512):
+def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024):
     """Uma volta da conversa. É esta função que a app do browser chama."""
     global _modelo_bom
 
@@ -99,17 +100,27 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
     candidatos = ([_modelo_bom] if _modelo_bom else []) + [m for m in MODELOS if m != _modelo_bom]
     ultimo_erro = None
 
+    # Limite pedido pela app, dentro de um intervalo sensato.
+    limite = max(64, min(int(max_tokens or 1024), MAX_TOKENS_TETO))
+
     for modelo in candidatos:
         try:
             resposta = cliente.chat_completion(
                 messages=mensagens,
                 model=modelo,
-                max_tokens=int(max_tokens or 512),
+                max_tokens=limite,
                 temperature=float(temperatura or 0.7),
             )
-            texto = (resposta.choices[0].message.content or "").strip()
+            escolha = resposta.choices[0]
+            texto = (escolha.message.content or "").strip()
             if texto:
                 _modelo_bom = modelo
+                # finish_reason="length" = ficou a meio por falta de tokens.
+                if getattr(escolha, "finish_reason", None) == "length":
+                    texto += (
+                        "\n\n[Resposta cortada no limite de "
+                        f"{limite} tokens. Aumente o \"Comprimento máximo da resposta\" nos Ajustes.]"
+                    )
                 return texto
             ultimo_erro = Exception("resposta vazia")
         except Exception as err:
@@ -172,7 +183,7 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     with gr.Accordion("Definições", open=False):
         prompt_ui = gr.Textbox(value=PROMPT_OMISSAO, label="Personalidade", lines=4)
         temp_ui = gr.Slider(0.1, 1.5, value=0.7, step=0.1, label="Temperatura")
-        tokens_ui = gr.Slider(64, 2048, value=512, step=64, label="Máximo de tokens")
+        tokens_ui = gr.Slider(64, 4096, value=1024, step=64, label="Máximo de tokens")
 
     with gr.Row():
         enviar = gr.Button("Enviar", variant="primary")
@@ -192,7 +203,7 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     api_history = gr.JSON(visible=False, label="history", value=[])
     api_system = gr.Textbox(visible=False, label="system_prompt", value=PROMPT_OMISSAO)
     api_temp = gr.Number(visible=False, label="temperatura", value=0.7)
-    api_tokens = gr.Number(visible=False, label="max_tokens", value=512)
+    api_tokens = gr.Number(visible=False, label="max_tokens", value=1024)
     api_saida = gr.Textbox(visible=False, label="resposta")
     api_botao = gr.Button(visible=False)
 
