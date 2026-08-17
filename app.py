@@ -40,7 +40,7 @@ except Exception:
     pass
 
 
-VERSAO_APP = "v21"  # confirmar na página do Space que é esta
+VERSAO_APP = "v22"  # confirmar na página do Space que é esta
 
 MODELOS_OMISSAO = [
     "Qwen/Qwen2.5-72B-Instruct",
@@ -158,6 +158,14 @@ VAZIAS = {
     "queria","quero","gostava","podes","pode","consegues","consegue","diz","diga","dizer",
     "sobre","principal","favor","obrigado","ola","olá","bom","dia","boa","tarde","noite",
     "the","of","is","what","who","tell","me","about","please",
+    # marcas temporais: servem para DETETAR que é preciso pesquisar, mas como
+    # termos de busca só atrapalham — a atualidade vem do filtro de datas.
+    "hoje","agora","atualmente","actualmente","momento","neste","nesta","atual","atuais",
+    # verbos e ligações frequentes na fala
+    "estão","estao","está","esta","estás","envolvidos","envolvido","envolvida","envolvidas",
+    "acontecer","acontece","passa","passar","passando","haver","existe","existem",
+    "algum","alguma","alguns","algumas","mais","menos","muito","muita","pouco","toda","todo",
+    "coisa","coisas","assunto","informação","informacao","informações","dados",
 }
 
 
@@ -205,6 +213,19 @@ def termos_distintivos(consulta):
     return fortes
 
 
+def termos_topico(consulta):
+    """O ASSUNTO da pergunta, por oposição ao SUJEITO.
+
+    Em «conflitos Estados Unidos», o sujeito é "Estados Unidos" e o assunto é
+    "conflitos". Sem exigir o assunto, a página da Wikipédia sobre os Estados
+    Unidos passa — fala do sujeito, mas não responde à pergunta.
+    """
+    return [
+        t for t in re.findall(r"[\wÀ-ÿ]{4,}", str(consulta))
+        if t.lower() not in VAZIAS and not t[0].isupper() and not t.isdigit()
+    ]
+
+
 def pontuar(resultado, termos):
     """Quantos termos distintos da pergunta aparecem no resultado."""
     alvo = " ".join([
@@ -225,6 +246,7 @@ def filtrar_relevantes(consulta, resultados):
     """
     termos = termos_significativos(consulta)
     fortes = termos_distintivos(consulta)
+    topicos = termos_topico(consulta)
     if not termos:
         return resultados
 
@@ -234,11 +256,59 @@ def filtrar_relevantes(consulta, resultados):
     for r in resultados:
         total = pontuar(r, termos)
         distintivos = pontuar(r, fortes) if fortes else 1
-        if total >= minimo and distintivos >= 1:
-            pontuados.append((total + distintivos, r))
+        assunto = pontuar(r, topicos) if topicos else 1
+
+        # Tem de falar do sujeito E do assunto. Um resultado que só bate no
+        # sujeito é a página genérica da entidade, não a resposta.
+        # Escape: coincidir em 3+ termos já é sinal suficiente.
+        if total >= minimo and distintivos >= 1 and (assunto >= 1 or total >= 3):
+            pontuados.append((total + distintivos + assunto, r))
 
     pontuados.sort(key=lambda x: x[0], reverse=True)
     return [r for _, r in pontuados]
+
+
+def _motor():
+    try:
+        from ddgs import DDGS
+        return DDGS
+    except Exception:
+        try:
+            from duckduckgo_search import DDGS
+            return DDGS
+        except Exception:
+            return None
+
+
+def pesquisar_noticias(termo, n=RESULTADOS_PESQUISA):
+    """Notícias do último mês.
+
+    Para "o que se passa agora", uma página de enciclopédia não serve: é
+    intemporal. Notícias trazem data e dizem o que mudou.
+    """
+    DDGS = _motor()
+    if DDGS is None:
+        return []
+    for regiao in ("pt-pt", "wt-wt"):
+        try:
+            with DDGS() as motor:
+                brutos = list(motor.news(termo[:300], region=regiao,
+                                         timelimit="m", max_results=n * 2))
+        except Exception:
+            brutos = []
+        if brutos:
+            saida = []
+            for r in brutos:
+                titulo = (r.get("title") or "").strip()
+                url = (r.get("url") or r.get("href") or "").strip()
+                resumo = (r.get("body") or "").strip()
+                data = (r.get("date") or "")[:10]
+                fonte = (r.get("source") or "").strip()
+                if titulo and url:
+                    saida.append({"titulo": titulo, "url": url,
+                                  "resumo": resumo[:400], "data": data, "fonte": fonte})
+            return saida
+    return []
 
 
 def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
@@ -271,7 +341,14 @@ def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
 
     def tentar_tudo():
         termo = construir_consulta(consulta)
-        achados = filtrar_relevantes(termo, procurar(termo))
+
+        # Perguntas sobre o presente: notícias primeiro, que têm data.
+        achados = []
+        if PADRAO_ATUALIDADE.search(str(consulta)):
+            achados = filtrar_relevantes(termo, pesquisar_noticias(termo, n))
+
+        if not achados:
+            achados = filtrar_relevantes(termo, procurar(termo))
 
         # Nada relevante à primeira: repetir só com nomes próprios e números.
         # "Constituição equipa Sporting Clube Portugal 2026" -> "Sporting Clube Portugal 2026"
@@ -302,14 +379,22 @@ def contexto_pesquisa(resultados):
         "",
     ]
     for i, r in enumerate(resultados, 1):
-        linhas.append(f"[{i}] {r['titulo']}")
+        cabecalho = f"[{i}] {r['titulo']}"
+        if r.get("data"):
+            cabecalho += f"  (notícia de {r['data']}"
+            if r.get("fonte"):
+                cabecalho += f", {r['fonte']}"
+            cabecalho += ")"
+        linhas.append(cabecalho)
         linhas.append(f"    {r['url']}")
-        if r["resumo"]:
+        if r.get("resumo"):
             linhas.append(f"    {r['resumo']}")
         linhas.append("")
     linhas.append(
-        "Responde com base nestes resultados e cita as fontes com [1], [2]. "
-        "Se não responderem à pergunta, di-lo em vez de inventares."
+        "Estes resultados são MAIS RECENTES do que o teu treino: trata-os como "
+        "a informação atual e responde com base neles, citando [1], [2]. "
+        "Não digas que não tens informação atualizada quando ela está aqui em cima. "
+        "Se os resultados não responderem à pergunta, di-lo em vez de inventares."
     )
     return "\n".join(linhas)
 
@@ -464,7 +549,8 @@ def _responder(message, history=None, system_prompt=None, temperatura=0.7, max_t
                     )
                 if resultados:
                     fontes = "\n".join(
-                        f"{i}. {r['titulo']}\n   {r['url']}"
+                        f"{i}. {r['titulo']}" + (f" ({r['data']})" if r.get("data") else "")
+                        + f"\n   {r['url']}"
                         for i, r in enumerate(resultados, 1)
                     )
                     texto += f"\n\nFontes (pesquisa: {consulta_usada}):\n" + fontes
