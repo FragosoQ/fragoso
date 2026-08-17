@@ -494,7 +494,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v18";
+    const APP_VERSAO = "v19";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -2333,6 +2333,13 @@
       const safeText = escapeHtml(text || "");
       const formatted = safeText
         .replace(/`([^`]+)`/g, '<code class="bg-slate-800 px-1.5 py-0.5 rounded text-indigo-300 font-mono text-[11px]">$1</code>')
+        // Links markdown [texto](url) antes dos URLs soltos, senão o url interno
+        // seria transformado primeiro e partia a sintaxe.
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer" class="text-brand-400 hover:text-brand-300 underline break-all">$1</a>')
+        // URLs soltos (o bloco de fontes vem assim)
+        .replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+          '$1<a href="$2" target="_blank" rel="noopener noreferrer" class="text-brand-400 hover:text-brand-300 underline break-all">$2</a>')
         .replace(/\n/g, "<br>")
         .replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
 

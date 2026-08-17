@@ -38,7 +38,7 @@ except Exception:
     pass
 
 
-VERSAO_APP = "v18"  # confirmar na página do Space que é esta
+VERSAO_APP = "v19"  # confirmar na página do Space que é esta
 
 MODELOS_OMISSAO = [
     "Qwen/Qwen2.5-72B-Instruct",
@@ -145,6 +145,67 @@ def precisa_pesquisa(texto, agora=None):
     return False
 
 
+# Palavras que não ajudam a procurar (e que enchem as perguntas faladas).
+VAZIAS = {
+    "a","o","as","os","um","uma","uns","umas","de","do","da","dos","das","em","no","na",
+    "nos","nas","por","para","com","sem","que","qual","quais","quem","como","quando",
+    "onde","porque","porquê","e","ou","mas","se","eu","tu","ele","ela","nos","voce","você",
+    "me","te","se","lhe","meu","minha","seu","sua","este","esta","esse","essa","aquele",
+    "aquela","isto","isso","aquilo","ser","estar","ter","haver","ir","vir","dizer","saber",
+    "queria","quero","gostava","podes","pode","consegues","consegue","diz","diga","dizer",
+    "sobre","principal","favor","obrigado","ola","olá","bom","dia","boa","tarde","noite",
+    "the","of","is","what","who","tell","me","about","please",
+}
+
+
+def construir_consulta(pergunta):
+    """Extrai os termos que interessam.
+
+    Uma pergunta falada — "Eu queria saber qual é a equipa principal do..." —
+    tem mais palavras de enchimento do que conteúdo. Passá-la tal e qual ao
+    motor de busca dá resultados aleatórios.
+    """
+    texto = str(pergunta or "").strip()
+    # Preserva maiúsculas: os nomes próprios são o que mais importa.
+    fichas = re.findall(r"[\wÀ-ÿ]+(?:[-/][\wÀ-ÿ]+)*", texto)
+    uteis = []
+    for f in fichas:
+        if f.lower() in VAZIAS:
+            continue
+        if len(f) < 2 and not f.isdigit():
+            continue
+        uteis.append(f)
+    consulta = " ".join(uteis[:14])
+    return consulta or texto[:120]
+
+
+def termos_significativos(consulta):
+    return {
+        t.lower()
+        for t in re.findall(r"[\wÀ-ÿ]{4,}", str(consulta))
+        if t.lower() not in VAZIAS
+    }
+
+
+def filtrar_relevantes(consulta, resultados):
+    """Descarta resultados sem nada a ver com a pergunta.
+
+    Quando o motor de busca é bloqueado, o pacote cai para outro motor que às
+    vezes devolve lixo. Injectar esse lixo é pior do que não pesquisar: o
+    modelo passa a ter contexto errado e o utilizador vê fontes absurdas.
+    """
+    termos = termos_significativos(consulta)
+    if not termos:
+        return resultados
+
+    guardados = []
+    for r in resultados:
+        alvo = (r.get("titulo", "") + " " + r.get("resumo", "") + " " + r.get("url", "")).lower()
+        if any(t in alvo for t in termos):
+            guardados.append(r)
+    return guardados
+
+
 def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
     """Devolve [{titulo, url, resumo}]. Lista vazia se falhar — nunca levanta."""
     try:
@@ -155,20 +216,30 @@ def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
         except Exception:
             return []
 
-    try:
-        with DDGS() as motor:
-            brutos = list(motor.text(str(consulta)[:400], region="pt-pt", max_results=n))
-    except Exception:
-        return []
+    termo = construir_consulta(consulta)
+    brutos = []
+
+    # region="pt-pt" primeiro; se não der nada, tentar sem região.
+    for regiao in ("pt-pt", "wt-wt"):
+        try:
+            with DDGS() as motor:
+                brutos = list(motor.text(termo[:300], region=regiao, max_results=n * 2))
+        except Exception:
+            brutos = []
+        if brutos:
+            break
 
     saida = []
-    for r in brutos[:n]:
+    for r in brutos:
         titulo = (r.get("title") or "").strip()
         url = (r.get("href") or r.get("url") or "").strip()
         resumo = (r.get("body") or r.get("snippet") or "").strip()
         if titulo and url:
             saida.append({"titulo": titulo, "url": url, "resumo": resumo[:400]})
-    return saida
+
+    # Só devolve o que tem relação com a pergunta.
+    relevantes = filtrar_relevantes(termo, saida)
+    return relevantes[:n]
 
 
 def contexto_pesquisa(resultados):
@@ -246,14 +317,20 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
     # --- Pesquisa web -------------------------------------------------------
     modo_pesquisa = str(pesquisar or "auto").lower()
     resultados = []
+    consulta_usada = ""
     if modo_pesquisa == "sempre" or (modo_pesquisa == "auto" and precisa_pesquisa(pergunta)):
+        consulta_usada = construir_consulta(pergunta)
         resultados = pesquisar_web(pergunta)
         if resultados:
             persona += "\n\n" + contexto_pesquisa(resultados)
-        elif modo_pesquisa == "sempre":
+        else:
+            # Nada relevante: dizer ao modelo, em vez de o deixar responder
+            # como se nem tivesse tentado procurar.
             persona += (
-                "\n\nNOTA: a pesquisa na web falhou ou não devolveu resultados. "
-                "Avisa o utilizador disso antes de responderes de memória."
+                "\n\nNOTA: procurei na web por «" + consulta_usada + "» mas não "
+                "encontrei resultados úteis. Diz ao utilizador que a pesquisa não "
+                "devolveu nada de relevante e responde apenas com o que sabes, "
+                "avisando que pode estar desatualizado."
             )
 
     if raciocinio:
@@ -315,10 +392,10 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
                     )
                 if resultados:
                     fontes = "\n".join(
-                        f"[{i}] {r['titulo']} — {r['url']}"
+                        f"{i}. {r['titulo']}\n   {r['url']}"
                         for i, r in enumerate(resultados, 1)
                     )
-                    texto += "\n\nFontes:\n" + fontes
+                    texto += f"\n\nFontes (pesquisa: {consulta_usada}):\n" + fontes
                 return texto
             ultimo_erro = Exception("resposta vazia")
         except Exception as err:
