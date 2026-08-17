@@ -101,6 +101,87 @@ def contexto_temporal():
     )
 
 
+
+# ===================== PESQUISA WEB =====================
+# O modelo tem conhecimento congelado na data do treino. Para perguntas sobre
+# o presente, procura-se primeiro e responde-se com base nos resultados.
+
+RESULTADOS_PESQUISA = 5
+
+# Sinais de que a pergunta é sobre o presente e o treino não chega.
+PADRAO_ATUALIDADE = re.compile(
+    r"\b("
+    r"hoje|ontem|amanh[ãa]|agora|atual|atuais|actualmente|atualmente|recente|recentes|"
+    r"[uú]ltim[ao]s?|neste momento|este ano|esta semana|este m[êe]s|"
+    r"not[íi]cias?|novidades?|"
+    r"pre[çc]o|custa|quanto custa|cota[çc][ãa]o|b[oó]lsa|"
+    r"quem [ée] o|quem ganhou|resultado|classifica[çc][ãa]o|plantel|transfer[êe]ncias?|"
+    r"vers[ãa]o|lan[çc]amento|saiu|estreou|"
+    r"pesquisa|procura|consulta na web|na internet"
+    r")\b",
+    re.I,
+)
+
+
+def precisa_pesquisa(texto, agora=None):
+    """Heurística: a pergunta parece ser sobre o presente?"""
+    t = str(texto or "")
+    if PADRAO_ATUALIDADE.search(t):
+        return True
+    # Qualquer ano igual ou posterior ao anterior ao corrente.
+    ano_atual = (agora or datetime.now(timezone.utc)).year
+    for m in re.finditer(r"\b(20\d{2})\b", t):
+        if int(m.group(1)) >= ano_atual - 1:
+            return True
+    return False
+
+
+def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
+    """Devolve [{titulo, url, resumo}]. Lista vazia se falhar — nunca levanta."""
+    try:
+        from ddgs import DDGS
+    except Exception:
+        try:
+            from duckduckgo_search import DDGS  # nome antigo do pacote
+        except Exception:
+            return []
+
+    try:
+        with DDGS() as motor:
+            brutos = list(motor.text(str(consulta)[:400], region="pt-pt", max_results=n))
+    except Exception:
+        return []
+
+    saida = []
+    for r in brutos[:n]:
+        titulo = (r.get("title") or "").strip()
+        url = (r.get("href") or r.get("url") or "").strip()
+        resumo = (r.get("body") or r.get("snippet") or "").strip()
+        if titulo and url:
+            saida.append({"titulo": titulo, "url": url, "resumo": resumo[:400]})
+    return saida
+
+
+def contexto_pesquisa(resultados):
+    """Transforma os resultados em texto para o modelo, com fontes numeradas."""
+    linhas = [
+        "RESULTADOS DE PESQUISA NA WEB (usa-os para responder, são mais recentes "
+        "que o teu treino):",
+        "",
+    ]
+    for i, r in enumerate(resultados, 1):
+        linhas.append(f"[{i}] {r['titulo']}")
+        linhas.append(f"    {r['url']}")
+        if r["resumo"]:
+            linhas.append(f"    {r['resumo']}")
+        linhas.append("")
+    linhas.append(
+        "Responde com base nestes resultados e cita as fontes com [1], [2]. "
+        "Se não responderem à pergunta, di-lo em vez de inventares."
+    )
+    return "\n".join(linhas)
+
+
 PROMPT_OMISSAO = os.getenv(
     "PROMPT",
     "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, "
@@ -132,7 +213,8 @@ def normalizar_historico(history):
     return saida[-MAX_HISTORICO:]
 
 
-def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024, modelo=None):
+def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024,
+              modelo=None, pesquisar="auto"):
     """Uma volta da conversa. É esta função que a app do browser chama."""
     global _modelo_bom
 
@@ -150,6 +232,19 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
     raciocinio = eh_modelo_raciocinio(escolhido)
     persona = (system_prompt or PROMPT_OMISSAO).strip() + contexto_temporal()
     pergunta = str(message).strip()
+
+    # --- Pesquisa web -------------------------------------------------------
+    modo_pesquisa = str(pesquisar or "auto").lower()
+    resultados = []
+    if modo_pesquisa == "sempre" or (modo_pesquisa == "auto" and precisa_pesquisa(pergunta)):
+        resultados = pesquisar_web(pergunta)
+        if resultados:
+            persona += "\n\n" + contexto_pesquisa(resultados)
+        elif modo_pesquisa == "sempre":
+            persona += (
+                "\n\nNOTA: a pesquisa na web falhou ou não devolveu resultados. "
+                "Avisa o utilizador disso antes de responderes de memória."
+            )
 
     if raciocinio:
         # A documentação do R1 desaconselha system prompt: as instruções devem
@@ -208,6 +303,12 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
                         "\n\n[Resposta cortada no limite de "
                         f"{limite} tokens. Aumente o \"Comprimento máximo da resposta\" nos Ajustes.]"
                     )
+                if resultados:
+                    fontes = "\n".join(
+                        f"[{i}] {r['titulo']} — {r['url']}"
+                        for i, r in enumerate(resultados, 1)
+                    )
+                    texto += "\n\nFontes:\n" + fontes
                 return texto
             ultimo_erro = Exception("resposta vazia")
         except Exception as err:
@@ -240,11 +341,11 @@ def traduzir_erro(err):
 
 # --- Interface para pessoas (testar o Space no browser) --------------------
 
-def _enviar_ui(mensagem, historico, prompt, temp, tokens, modelo):
+def _enviar_ui(mensagem, historico, prompt, temp, tokens, modelo, pesquisa):
     historico = historico or []
     if not (mensagem or "").strip():
         return historico, ""
-    resposta = responder(mensagem, historico, prompt, temp, tokens, modelo)
+    resposta = responder(mensagem, historico, prompt, temp, tokens, modelo, pesquisa)
     historico = historico + [
         {"role": "user", "content": mensagem},
         {"role": "assistant", "content": resposta},
@@ -275,12 +376,16 @@ with gr.Blocks(title="Fragoso Bot") as demo:
             choices=[(rotulo, ident) for ident, rotulo in CATALOGO],
             value="", label="Modelo",
         )
+        pesquisa_ui = gr.Radio(
+            choices=[("Automática", "auto"), ("Sempre", "sempre"), ("Desligada", "nao")],
+            value="auto", label="Pesquisa na web",
+        )
 
     with gr.Row():
         enviar = gr.Button("Enviar", variant="primary")
         limpar = gr.Button("Limpar")
 
-    entradas = [caixa, conversa, prompt_ui, temp_ui, tokens_ui, modelo_ui]
+    entradas = [caixa, conversa, prompt_ui, temp_ui, tokens_ui, modelo_ui, pesquisa_ui]
     saidas = [conversa, caixa]
 
     # api_name=False: pertencem à interface humana, não à API pública.
@@ -296,12 +401,13 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     api_temp = gr.Number(visible=False, label="temperatura", value=0.7)
     api_tokens = gr.Number(visible=False, label="max_tokens", value=1024)
     api_modelo = gr.Textbox(visible=False, label="modelo", value="")
+    api_pesquisa = gr.Textbox(visible=False, label="pesquisar", value="auto")
     api_saida = gr.Textbox(visible=False, label="resposta")
     api_botao = gr.Button(visible=False)
 
     api_botao.click(
         responder,
-        [api_message, api_history, api_system, api_temp, api_tokens, api_modelo],
+        [api_message, api_history, api_system, api_temp, api_tokens, api_modelo, api_pesquisa],
         api_saida,
         api_name="chat",
     )

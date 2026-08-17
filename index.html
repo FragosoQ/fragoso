@@ -415,6 +415,18 @@
             <input type="text" id="setting-modelo-outro" placeholder="ou escreva outro: utilizador/modelo" class="w-full mt-2 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
           </div>
 
+          <!-- Pesquisa na web -->
+          <div>
+            <label class="block font-semibold text-slate-200 mb-1">Pesquisa na web</label>
+            <select id="setting-pesquisa" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500">
+              <option value="auto">Automática — só quando a pergunta é sobre o presente</option>
+              <option value="sempre">Sempre — pesquisa em todas as perguntas</option>
+              <option value="nao">Desligada — apenas o conhecimento do modelo</option>
+            </select>
+            <p class="text-[11px] text-slate-400 mt-1">O modelo tem conhecimento congelado na data do treino. A pesquisa dá-lhe informação atual, com as fontes citadas. Torna a resposta 2 a 5 segundos mais lenta.</p>
+            <p class="text-[11px] text-amber-400/80 mt-1">A pergunta é enviada a um motor de busca. Desligue para assuntos confidenciais.</p>
+          </div>
+
           <!-- Comprimento das respostas -->
           <div>
             <label class="block font-semibold text-slate-200 mb-1">Comprimento máximo da resposta</label>
@@ -482,7 +494,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v17";
+    const APP_VERSAO = "v18";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -571,6 +583,7 @@
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
       maxTokens: parseInt(localStorage.getItem("chat_max_tokens") || "1024", 10) || 1024,
       modelo: localStorage.getItem("chat_modelo") || "",
+      pesquisa: localStorage.getItem("chat_pesquisa") || "auto",
       isLoading: false,
       gradioClient: null,
       speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
@@ -627,6 +640,7 @@
     const settingModelo = document.getElementById("setting-modelo");
     const settingModeloOutro = document.getElementById("setting-modelo-outro");
     const modeloAviso = document.getElementById("modelo-aviso");
+    const settingPesquisa = document.getElementById("setting-pesquisa");
     const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
     const presetPersonaTecnico = document.getElementById("preset-persona-tecnico");
     const fieldHfSpace = document.getElementById("field-hf-space");
@@ -672,6 +686,7 @@
       settingSystemPrompt.value = state.systemPrompt;
       settingMaxTokens.value = String(state.maxTokens);
       preencherEscolhaModelo();
+      settingPesquisa.value = state.pesquisa;
       settingSpeechRecognition.checked = state.speechRecognition;
       settingTextToSpeech.checked = state.textToSpeech;
       settingSpeechLang.value = state.speechLang;
@@ -1853,7 +1868,8 @@
                 history: historicoMensagens(),
                 message: userText,
                 max_tokens: tokensPedido(),
-                modelo: state.modelo || ""
+                modelo: state.modelo || "",
+                pesquisar: state.pesquisa || "auto"
               })
             });
           } catch (err) {
@@ -1933,6 +1949,7 @@
       topP: /top_?p/i,
       topK: /top_?k/i,
       modelo: /^(modelo|model|model_?name|model_?id)$/i,
+      pesquisa: /^(pesquisar|pesquisa|search|web_?search|usar_?web)$/i,
       penal: /penalty|penaliza/i
     };
 
@@ -2030,6 +2047,9 @@
 
       const pModelo = apanhar(PADRAO.modelo);
       if (pModelo) args[nomeParam(pModelo)] = state.modelo || "";
+
+      const pPesquisa = apanhar(PADRAO.pesquisa);
+      if (pPesquisa) args[nomeParam(pPesquisa)] = state.pesquisa || "auto";
 
       // Restantes obrigatórios: usa o default declarado ou um valor neutro do tipo certo.
       for (const p of params) {
@@ -2646,6 +2666,7 @@
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
         state.maxTokens = parseInt(settingMaxTokens.value, 10) || 1024;
         state.modelo = settingModeloOutro.value.trim() || settingModelo.value;
+        state.pesquisa = settingPesquisa.value;
         state.speechRecognition = settingSpeechRecognition.checked;
         // Durante o modo conversa o TTS está forçado; guardar não o pode desligar.
         state.textToSpeech = conversa.ttsForcado ? true : settingTextToSpeech.checked;
@@ -2673,6 +2694,7 @@
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
         localStorage.setItem("chat_max_tokens", state.maxTokens);
         localStorage.setItem("chat_modelo", state.modelo);
+        localStorage.setItem("chat_pesquisa", state.pesquisa);
         localStorage.setItem("chat_speech_recognition", state.speechRecognition);
         localStorage.setItem("chat_text_to_speech", state.textToSpeech);
         localStorage.setItem("chat_speech_lang", state.speechLang);
