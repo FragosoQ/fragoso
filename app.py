@@ -18,6 +18,7 @@ Configuração no Space (Settings):
 
 import inspect
 import os
+import re
 
 import gradio as gr
 from huggingface_hub import InferenceClient
@@ -44,8 +45,34 @@ MODELOS_OMISSAO = [
 ]
 
 MODELOS = [m.strip() for m in os.getenv("MODELO", "").split(",") if m.strip()] or MODELOS_OMISSAO
-MAX_HISTORICO = 20      # mensagens enviadas ao modelo (limita custo e latência)
-MAX_TOKENS_TETO = 4096  # teto absoluto, mesmo que a app peça mais
+MAX_HISTORICO = 20           # mensagens enviadas ao modelo (limita custo e latência)
+MAX_TOKENS_TETO = 8192       # teto absoluto, mesmo que a app peça mais
+ORCAMENTO_RACIOCINIO = 2048  # tokens extra dados aos modelos que "pensam" antes
+
+# Modelos oferecidos na app. A chave vazia significa "escolha automática".
+CATALOGO = [
+    ("", "Automático — rápido"),
+    ("Qwen/Qwen2.5-72B-Instruct", "Qwen 2.5 72B — equilibrado"),
+    ("meta-llama/Llama-3.3-70B-Instruct", "Llama 3.3 70B — conversa"),
+    ("deepseek-ai/DeepSeek-R1", "DeepSeek R1 — raciocínio (lento)"),
+]
+
+
+def eh_modelo_raciocinio(modelo):
+    """R1, QwQ e afins escrevem o raciocínio antes da resposta."""
+    return bool(re.search(r"(^|[-/_])(r1|qwq|thinking|reasoner?)([-/_]|$)", str(modelo), re.I))
+
+
+def limpar_raciocinio(texto):
+    """Remove os blocos <think>…</think>: são notas internas do modelo.
+
+    Sem isto o utilizador via — e o sintetizador lia em voz alta — todo o
+    monólogo de raciocínio antes da resposta propriamente dita.
+    """
+    t = re.sub(r"<think>.*?</think>", "", texto, flags=re.S | re.I)
+    # Bloco por fechar = ficou sem tokens a meio do raciocínio.
+    t = re.sub(r"<think>.*$", "", t, flags=re.S | re.I)
+    return t.strip()
 
 PROMPT_OMISSAO = os.getenv(
     "PROMPT",
@@ -78,7 +105,7 @@ def normalizar_historico(history):
     return saida[-MAX_HISTORICO:]
 
 
-def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024):
+def responder(message, history=None, system_prompt=None, temperatura=0.7, max_tokens=1024, modelo=None):
     """Uma volta da conversa. É esta função que a app do browser chama."""
     global _modelo_bom
 
@@ -92,31 +119,64 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
             "huggingface.co/settings/tokens (permissão de leitura)."
         )
 
-    mensagens = [{"role": "system", "content": (system_prompt or PROMPT_OMISSAO).strip()}]
-    mensagens.extend(normalizar_historico(history))
-    mensagens.append({"role": "user", "content": str(message).strip()})
+    escolhido = (modelo or "").strip()
+    raciocinio = eh_modelo_raciocinio(escolhido)
+    persona = (system_prompt or PROMPT_OMISSAO).strip()
+    pergunta = str(message).strip()
 
-    # Tenta primeiro o modelo que já funcionou; depois a lista, por ordem.
-    candidatos = ([_modelo_bom] if _modelo_bom else []) + [m for m in MODELOS if m != _modelo_bom]
+    if raciocinio:
+        # A documentação do R1 desaconselha system prompt: as instruções devem
+        # vir dentro da mensagem do utilizador.
+        mensagens = normalizar_historico(history)
+        mensagens.append({"role": "user", "content": f"{persona}\n\n---\n\n{pergunta}"})
+    else:
+        mensagens = [{"role": "system", "content": persona}]
+        mensagens.extend(normalizar_historico(history))
+        mensagens.append({"role": "user", "content": pergunta})
+
+    # Modelo explícito da app; senão, o que já funcionou, senão a lista.
+    if escolhido:
+        candidatos = [escolhido]
+    else:
+        candidatos = ([_modelo_bom] if _modelo_bom else []) + [m for m in MODELOS if m != _modelo_bom]
     ultimo_erro = None
 
     # Limite pedido pela app, dentro de um intervalo sensato.
     limite = max(64, min(int(max_tokens or 1024), MAX_TOKENS_TETO))
 
-    for modelo in candidatos:
+    # O raciocínio também gasta tokens: sem folga extra, o modelo pensa até ao
+    # limite e devolve resposta vazia.
+    limite_envio = min(limite + ORCAMENTO_RACIOCINIO, MAX_TOKENS_TETO) if raciocinio else limite
+
+    # O R1 fica incoerente fora de 0.5–0.7.
+    temp = float(temperatura or 0.7)
+    if raciocinio:
+        temp = min(max(temp, 0.5), 0.7)
+
+    for modelo_id in candidatos:
         try:
             resposta = cliente.chat_completion(
                 messages=mensagens,
-                model=modelo,
-                max_tokens=limite,
-                temperature=float(temperatura or 0.7),
+                model=modelo_id,
+                max_tokens=limite_envio,
+                temperature=temp,
             )
             escolha = resposta.choices[0]
             texto = (escolha.message.content or "").strip()
+
+            if raciocinio:
+                texto = limpar_raciocinio(texto)
+                if not texto:
+                    return (
+                        "O modelo gastou todo o orçamento a raciocinar e não chegou a "
+                        "responder. Suba o \"Comprimento máximo da resposta\" nos Ajustes, "
+                        "ou escolha um modelo sem raciocínio."
+                    )
+
             if texto:
-                _modelo_bom = modelo
+                _modelo_bom = modelo_id
                 # finish_reason="length" = ficou a meio por falta de tokens.
-                if getattr(escolha, "finish_reason", None) == "length":
+                if getattr(escolha, "finish_reason", None) == "length" and not raciocinio:
                     texto += (
                         "\n\n[Resposta cortada no limite de "
                         f"{limite} tokens. Aumente o \"Comprimento máximo da resposta\" nos Ajustes.]"
@@ -153,11 +213,11 @@ def traduzir_erro(err):
 
 # --- Interface para pessoas (testar o Space no browser) --------------------
 
-def _enviar_ui(mensagem, historico, prompt, temp, tokens):
+def _enviar_ui(mensagem, historico, prompt, temp, tokens, modelo):
     historico = historico or []
     if not (mensagem or "").strip():
         return historico, ""
-    resposta = responder(mensagem, historico, prompt, temp, tokens)
+    resposta = responder(mensagem, historico, prompt, temp, tokens, modelo)
     historico = historico + [
         {"role": "user", "content": mensagem},
         {"role": "assistant", "content": resposta},
@@ -183,13 +243,17 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     with gr.Accordion("Definições", open=False):
         prompt_ui = gr.Textbox(value=PROMPT_OMISSAO, label="Personalidade", lines=4)
         temp_ui = gr.Slider(0.1, 1.5, value=0.7, step=0.1, label="Temperatura")
-        tokens_ui = gr.Slider(64, 4096, value=1024, step=64, label="Máximo de tokens")
+        tokens_ui = gr.Slider(64, 8192, value=1024, step=64, label="Máximo de tokens")
+        modelo_ui = gr.Dropdown(
+            choices=[(rotulo, ident) for ident, rotulo in CATALOGO],
+            value="", label="Modelo",
+        )
 
     with gr.Row():
         enviar = gr.Button("Enviar", variant="primary")
         limpar = gr.Button("Limpar")
 
-    entradas = [caixa, conversa, prompt_ui, temp_ui, tokens_ui]
+    entradas = [caixa, conversa, prompt_ui, temp_ui, tokens_ui, modelo_ui]
     saidas = [conversa, caixa]
 
     # api_name=False: pertencem à interface humana, não à API pública.
@@ -204,12 +268,13 @@ with gr.Blocks(title="Fragoso Bot") as demo:
     api_system = gr.Textbox(visible=False, label="system_prompt", value=PROMPT_OMISSAO)
     api_temp = gr.Number(visible=False, label="temperatura", value=0.7)
     api_tokens = gr.Number(visible=False, label="max_tokens", value=1024)
+    api_modelo = gr.Textbox(visible=False, label="modelo", value="")
     api_saida = gr.Textbox(visible=False, label="resposta")
     api_botao = gr.Button(visible=False)
 
     api_botao.click(
         responder,
-        [api_message, api_history, api_system, api_temp, api_tokens],
+        [api_message, api_history, api_system, api_temp, api_tokens, api_modelo],
         api_saida,
         api_name="chat",
     )

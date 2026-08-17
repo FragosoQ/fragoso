@@ -401,6 +401,20 @@
             </div>
           </div>
 
+          <!-- Escolha do modelo -->
+          <div>
+            <label class="block font-semibold text-slate-200 mb-1">Modelo de IA</label>
+            <select id="setting-modelo" class="w-full bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-slate-200 focus:outline-none focus:border-brand-500">
+              <option value="">Automático — rápido</option>
+              <option value="Qwen/Qwen2.5-72B-Instruct">Qwen 2.5 72B — equilibrado</option>
+              <option value="meta-llama/Llama-3.3-70B-Instruct">Llama 3.3 70B — conversa</option>
+              <option value="deepseek-ai/DeepSeek-R1">DeepSeek R1 — raciocínio (lento)</option>
+            </select>
+            <p id="modelo-aviso" class="text-[11px] text-slate-400 mt-1">Só funciona com a origem Hugging Face Space.</p>
+
+            <input type="text" id="setting-modelo-outro" placeholder="ou escreva outro: utilizador/modelo" class="w-full mt-2 bg-slate-950 border border-slate-800 rounded-xl p-2.5 text-white focus:outline-none focus:border-brand-500 font-mono text-xs">
+          </div>
+
           <!-- Comprimento das respostas -->
           <div>
             <label class="block font-semibold text-slate-200 mb-1">Comprimento máximo da resposta</label>
@@ -468,7 +482,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v16";
+    const APP_VERSAO = "v17";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -501,6 +515,39 @@
       return !/[.!?…:;)"'\]}»]$/.test(t);
     }
 
+    // O modelo guardado pode não estar na lista (foi escrito à mão).
+    function preencherEscolhaModelo() {
+      const naLista = [...settingModelo.options].some(o => o.value === state.modelo);
+      settingModelo.value = naLista ? state.modelo : "";
+      settingModeloOutro.value = naLista ? "" : state.modelo;
+      avisarSobreModelo();
+    }
+
+    function ehModeloRaciocinio(id) {
+      return /(^|[-/_])(r1|qwq|thinking|reasoner?)([-/_]|$)/i.test(String(id || ""));
+    }
+
+    function avisarSobreModelo() {
+      const escolhido = settingModeloOutro.value.trim() || settingModelo.value;
+      // Ler o formulário, não o estado guardado: o utilizador ainda não gravou.
+      if (settingProvider.value !== "huggingface") {
+        modeloAviso.textContent = "Só funciona com a origem Hugging Face Space.";
+        modeloAviso.className = "text-[11px] text-slate-400 mt-1";
+        return;
+      }
+      if (ehModeloRaciocinio(escolhido)) {
+        modeloAviso.textContent =
+          "Modelo de raciocínio: pensa antes de responder. Respostas melhores em problemas difíceis, " +
+          "mas 3 a 10 vezes mais lento — pouco prático no modo conversa por voz.";
+        modeloAviso.className = "text-[11px] text-amber-400 mt-1";
+        return;
+      }
+      modeloAviso.textContent = escolhido
+        ? "O Space tem de ter acesso a este modelo pela Inference API."
+        : "A escolha automática usa o primeiro modelo disponível.";
+      modeloAviso.className = "text-[11px] text-slate-400 mt-1";
+    }
+
     function tokensPedido() {
       return conversa.ativa ? Math.min(state.maxTokens, 400) : state.maxTokens;
     }
@@ -523,6 +570,7 @@
       botName: localStorage.getItem("chat_bot_name") || "Fragoso Bot",
       systemPrompt: localStorage.getItem("chat_system_prompt") || DEFAULT_FRAGOSO_PROMPT,
       maxTokens: parseInt(localStorage.getItem("chat_max_tokens") || "1024", 10) || 1024,
+      modelo: localStorage.getItem("chat_modelo") || "",
       isLoading: false,
       gradioClient: null,
       speechRecognition: localStorage.getItem("chat_speech_recognition") === "true",
@@ -576,6 +624,9 @@
     const settingBotName = document.getElementById("setting-bot-name");
     const settingSystemPrompt = document.getElementById("setting-system-prompt");
     const settingMaxTokens = document.getElementById("setting-max-tokens");
+    const settingModelo = document.getElementById("setting-modelo");
+    const settingModeloOutro = document.getElementById("setting-modelo-outro");
+    const modeloAviso = document.getElementById("modelo-aviso");
     const presetPersonaFragoso = document.getElementById("preset-persona-fragoso");
     const presetPersonaTecnico = document.getElementById("preset-persona-tecnico");
     const fieldHfSpace = document.getElementById("field-hf-space");
@@ -620,6 +671,7 @@
       settingBotName.value = state.botName;
       settingSystemPrompt.value = state.systemPrompt;
       settingMaxTokens.value = String(state.maxTokens);
+      preencherEscolhaModelo();
       settingSpeechRecognition.checked = state.speechRecognition;
       settingTextToSpeech.checked = state.textToSpeech;
       settingSpeechLang.value = state.speechLang;
@@ -1800,7 +1852,8 @@
                 system_prompt: promptEfetivo(),
                 history: historicoMensagens(),
                 message: userText,
-                max_tokens: tokensPedido()
+                max_tokens: tokensPedido(),
+                modelo: state.modelo || ""
               })
             });
           } catch (err) {
@@ -1879,6 +1932,7 @@
       maxTokens: /max_?(new_)?tokens|max_?length/i,
       topP: /top_?p/i,
       topK: /top_?k/i,
+      modelo: /^(modelo|model|model_?name|model_?id)$/i,
       penal: /penalty|penaliza/i
     };
 
@@ -1973,6 +2027,9 @@
       // utilizador. Sem isto, o limite escolhido nos Ajustes era ignorado.
       const pTokens = apanhar(PADRAO.maxTokens);
       if (pTokens) args[nomeParam(pTokens)] = tokensPedido();
+
+      const pModelo = apanhar(PADRAO.modelo);
+      if (pModelo) args[nomeParam(pModelo)] = state.modelo || "";
 
       // Restantes obrigatórios: usa o default declarado ou um valor neutro do tipo certo.
       for (const p of params) {
@@ -2534,9 +2591,11 @@
 
       openSettingsBtn.addEventListener("click", () => settingsModal.classList.remove("hidden"));
       closeSettingsBtn.addEventListener("click", () => settingsModal.classList.add("hidden"));
-      settingProvider.addEventListener("change", updateProviderFieldsVisibility);
+      settingProvider.addEventListener("change", () => { updateProviderFieldsVisibility(); avisarSobreModelo(); });
       testSpaceBtn.addEventListener("click", testarLigacaoSpace);
       testApiBtn.addEventListener("click", testarApi);
+      settingModelo.addEventListener("change", avisarSobreModelo);
+      settingModeloOutro.addEventListener("input", avisarSobreModelo);
 
       // Apaga o service worker e todas as caches, e recarrega do servidor.
       // Resolve o caso "já substituí o ficheiro mas continuo a ver o antigo".
@@ -2586,6 +2645,7 @@
         state.botName = settingBotName.value.trim() || "Fragoso Bot";
         state.systemPrompt = settingSystemPrompt.value.trim() || DEFAULT_FRAGOSO_PROMPT;
         state.maxTokens = parseInt(settingMaxTokens.value, 10) || 1024;
+        state.modelo = settingModeloOutro.value.trim() || settingModelo.value;
         state.speechRecognition = settingSpeechRecognition.checked;
         // Durante o modo conversa o TTS está forçado; guardar não o pode desligar.
         state.textToSpeech = conversa.ttsForcado ? true : settingTextToSpeech.checked;
@@ -2612,6 +2672,7 @@
         localStorage.setItem("chat_bot_name", state.botName);
         localStorage.setItem("chat_system_prompt", state.systemPrompt);
         localStorage.setItem("chat_max_tokens", state.maxTokens);
+        localStorage.setItem("chat_modelo", state.modelo);
         localStorage.setItem("chat_speech_recognition", state.speechRecognition);
         localStorage.setItem("chat_text_to_speech", state.textToSpeech);
         localStorage.setItem("chat_speech_lang", state.speechLang);
