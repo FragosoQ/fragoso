@@ -1,3 +1,4 @@
+
 """Fragoso Bot — cérebro do assistente.
 
 Substitui o app.py do Space Fragoso82/fragoso.
@@ -38,7 +39,7 @@ except Exception:
     pass
 
 
-VERSAO_APP = "v19"  # confirmar na página do Space que é esta
+VERSAO_APP = "v20"  # confirmar na página do Space que é esta
 
 MODELOS_OMISSAO = [
     "Qwen/Qwen2.5-72B-Instruct",
@@ -180,66 +181,62 @@ def construir_consulta(pergunta):
 
 
 def termos_significativos(consulta):
-    return {
-        t.lower()
-        for t in re.findall(r"[\wÀ-ÿ]{4,}", str(consulta))
+    return [
+        t for t in re.findall(r"[\wÀ-ÿ]{3,}", str(consulta))
         if t.lower() not in VAZIAS
-    }
+    ]
+
+
+def termos_distintivos(consulta):
+    """Nomes próprios e números — o que identifica mesmo o assunto.
+
+    Em «Constituição equipa Sporting Clube Portugal 2026», os distintivos são
+    Sporting, Clube, Portugal e 2026. "Constituição" sozinha não chega: casa
+    com a Constituição brasileira e com tudo o resto.
+    """
+    fortes = []
+    for t in re.findall(r"[\wÀ-ÿ]{3,}", str(consulta)):
+        if t.lower() in VAZIAS:
+            continue
+        if t[0].isupper() or t.isdigit():
+            fortes.append(t)
+    return fortes
+
+
+def pontuar(resultado, termos):
+    """Quantos termos distintos da pergunta aparecem no resultado."""
+    alvo = " ".join([
+        resultado.get("titulo", ""),
+        resultado.get("resumo", ""),
+        resultado.get("url", ""),
+    ]).lower()
+    return sum(1 for t in {x.lower() for x in termos} if t in alvo)
 
 
 def filtrar_relevantes(consulta, resultados):
-    """Descarta resultados sem nada a ver com a pergunta.
+    """Descarta resultados sem relação real com a pergunta.
 
-    Quando o motor de busca é bloqueado, o pacote cai para outro motor que às
-    vezes devolve lixo. Injectar esse lixo é pior do que não pesquisar: o
-    modelo passa a ter contexto errado e o utilizador vê fontes absurdas.
+    Exigir uma única palavra em comum não chega: uma pergunta sobre a
+    "Constituição da equipa do Sporting" trazia a Constituição brasileira.
+    Passa a exigir DOIS termos distintos, um deles distintivo (nome próprio
+    ou número). Melhor não ter fontes do que ter fontes erradas.
     """
     termos = termos_significativos(consulta)
+    fortes = termos_distintivos(consulta)
     if not termos:
         return resultados
 
-    guardados = []
+    minimo = 2 if len(termos) >= 2 else 1
+
+    pontuados = []
     for r in resultados:
-        alvo = (r.get("titulo", "") + " " + r.get("resumo", "") + " " + r.get("url", "")).lower()
-        if any(t in alvo for t in termos):
-            guardados.append(r)
-    return guardados
+        total = pontuar(r, termos)
+        distintivos = pontuar(r, fortes) if fortes else 1
+        if total >= minimo and distintivos >= 1:
+            pontuados.append((total + distintivos, r))
 
-
-def pesquisar_web(consulta, n=RESULTADOS_PESQUISA):
-    """Devolve [{titulo, url, resumo}]. Lista vazia se falhar — nunca levanta."""
-    try:
-        from ddgs import DDGS
-    except Exception:
-        try:
-            from duckduckgo_search import DDGS  # nome antigo do pacote
-        except Exception:
-            return []
-
-    termo = construir_consulta(consulta)
-    brutos = []
-
-    # region="pt-pt" primeiro; se não der nada, tentar sem região.
-    for regiao in ("pt-pt", "wt-wt"):
-        try:
-            with DDGS() as motor:
-                brutos = list(motor.text(termo[:300], region=regiao, max_results=n * 2))
-        except Exception:
-            brutos = []
-        if brutos:
-            break
-
-    saida = []
-    for r in brutos:
-        titulo = (r.get("title") or "").strip()
-        url = (r.get("href") or r.get("url") or "").strip()
-        resumo = (r.get("body") or r.get("snippet") or "").strip()
-        if titulo and url:
-            saida.append({"titulo": titulo, "url": url, "resumo": resumo[:400]})
-
-    # Só devolve o que tem relação com a pergunta.
-    relevantes = filtrar_relevantes(termo, saida)
-    return relevantes[:n]
+    pontuados.sort(key=lambda x: x[0], reverse=True)
+    return [r for _, r in pontuados]
 
 
 def contexto_pesquisa(resultados):
