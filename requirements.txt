@@ -1,2 +1,3 @@
 huggingface_hub>=0.26
 spaces
+tzdata

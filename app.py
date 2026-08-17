@@ -19,6 +19,7 @@ Configuração no Space (Settings):
 import inspect
 import os
 import re
+from datetime import datetime, timezone
 
 import gradio as gr
 from huggingface_hub import InferenceClient
@@ -74,6 +75,32 @@ def limpar_raciocinio(texto):
     t = re.sub(r"<think>.*$", "", t, flags=re.S | re.I)
     return t.strip()
 
+def contexto_temporal():
+    """Diz ao modelo em que dia estamos.
+
+    Sem isto, o modelo assume que o presente é a data em que acabou o treino.
+    O Llama 3.3, treinado com dados até Dezembro de 2023, trata 2026 como
+    futuro distante e recusa-se a responder a perguntas sobre o presente.
+    Calculado a cada chamada, para não congelar no arranque do Space.
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        agora = datetime.now(ZoneInfo("Europe/Lisbon"))
+    except Exception:
+        agora = datetime.now(timezone.utc)
+
+    return (
+        f"\n\nCONTEXTO TEMPORAL: hoje é {agora.strftime('%d/%m/%Y')}. "
+        "Este é o presente, não o futuro. "
+        "O teu treino terminou numa data anterior, por isso não conheces "
+        "acontecimentos recentes. Quando te perguntarem sobre factos que podem "
+        "ter mudado — plantéis, transferências, resultados, preços, cargos, "
+        "notícias, versões de software — responde assim: diz em que data termina "
+        "o teu conhecimento, dá o que sabias nessa altura, e avisa que pode estar "
+        "desatualizado. NUNCA digas que uma data já passada ou atual está no futuro."
+    )
+
+
 PROMPT_OMISSAO = os.getenv(
     "PROMPT",
     "Tu és a extensão digital do Fragoso: inteligente, direto ao ponto, "
@@ -121,7 +148,7 @@ def responder(message, history=None, system_prompt=None, temperatura=0.7, max_to
 
     escolhido = (modelo or "").strip()
     raciocinio = eh_modelo_raciocinio(escolhido)
-    persona = (system_prompt or PROMPT_OMISSAO).strip()
+    persona = (system_prompt or PROMPT_OMISSAO).strip() + contexto_temporal()
     pergunta = str(message).strip()
 
     if raciocinio:
