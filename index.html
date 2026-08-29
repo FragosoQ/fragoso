@@ -980,7 +980,10 @@
       timerRetoma: null,
       vigia: null,
       paradoDesde: 0,
-      ultimoSom: 0
+      ultimoSom: 0,
+      recebeuResultado: false,
+      inicioEscuta: 0,
+      conflitoTratado: false
     };
 
     // ===== VISUALIZADOR DE ÁUDIO =====
@@ -991,6 +994,33 @@
       ctx: null, analisador: null, stream: null, fonte: null,
       dados: null, raf: null, fase: 0, nivelSuave: 0
     };
+
+    // O reconhecimento de voz do Chrome abre o microfone por sua conta. Se o
+    // visualizador mantiver um segundo stream aberto ao mesmo tempo, em muitos
+    // telemóveis o reconhecimento fica sem áudio: a onda mexe e não chega texto.
+    // Por isso o nível real só é lido onde é seguro, e é largado ao primeiro sinal
+    // de conflito.
+    let visualizadorProibido = false;
+
+    function dispositivoTactil() {
+      const ua = navigator.userAgent || "";
+      return /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.maxTouchPoints || 0) > 1;
+    }
+
+    function largarVisualizador(motivo) {
+      visualizadorProibido = true;
+      if (audio.raf) cancelAnimationFrame(audio.raf);
+      audio.raf = null;
+      if (audio.stream) audio.stream.getTracks().forEach(t => t.stop());
+      if (audio.ctx && audio.ctx.state !== "closed") audio.ctx.close().catch(() => {});
+      audio.stream = null; audio.ctx = null; audio.analisador = null;
+      audio.fonte = null; audio.dados = null; audio.nivelSuave = 0;
+      if (motivo) {
+        conversaAvisoMic.textContent = motivo;
+        conversaAvisoMic.classList.remove("hidden");
+      }
+      desenharOnda();
+    }
 
     const CORES_ONDA = {
       ouvir: ["#34d399", "#10b981"],
@@ -1005,6 +1035,12 @@
 
     async function iniciarVisualizador() {
       conversaAvisoMic.classList.add("hidden");
+      if (visualizadorProibido) return false;
+      // No telemóvel o microfone é exclusivo: nunca disputar com o reconhecimento.
+      if (dispositivoTactil()) {
+        visualizadorProibido = true;
+        return false;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return false;
       try {
         audio.stream = await navigator.mediaDevices.getUserMedia({
@@ -1092,6 +1128,7 @@
         // Onda sintética: respiração lenta em espera, mais viva quando o bot fala.
         audio.fase += estadoAtualConversa === "falar" ? 0.16 : 0.05;
         const amplitude = estadoAtualConversa === "falar" ? 0.55
+                        : estadoAtualConversa === "ouvir" ? 0.30
                         : estadoAtualConversa === "pensar" ? 0.22 : 0.12;
         alturas = [];
         for (let i = 0; i < N_BARRAS; i++) {
@@ -1215,6 +1252,7 @@
     }
 
     function tratarResultadoConversa(event) {
+      conversa.recebeuResultado = true;
       let finais = "";
       let parcial = "";
       for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -1277,6 +1315,8 @@
 
       conversa.paradoDeProposito = false;
       conversa.buffer = "";
+      conversa.recebeuResultado = false;
+      conversa.inicioEscuta = Date.now();
       recognition.continuous = true;
       recognition.interimResults = true;
       recognition.lang = state.speechLang;
@@ -1333,6 +1373,26 @@
       clearInterval(conversa.vigia);
       conversa.vigia = setInterval(() => {
         if (!conversa.ativa) return;
+
+        // Conflito de microfone: a onda vê som, o reconhecimento não devolve nada.
+        // Largar o stream do visualizador e reabrir a escuta — uma só vez.
+        if (
+          !conversa.conflitoTratado &&
+          state.isListening &&
+          audio.analisador &&
+          !conversa.recebeuResultado &&
+          conversa.inicioEscuta &&
+          Date.now() - conversa.inicioEscuta > 6000 &&
+          audio.nivelSuave > 0.04
+        ) {
+          conversa.conflitoTratado = true;
+          console.warn("[conversa] o microfone estava ocupado pelo visualizador — a largá-lo");
+          largarVisualizador("A onda passou a aproximada: o microfone estava a ser disputado.");
+          pararEscuta();
+          setTimeout(() => { conversa.paradoDeProposito = false; iniciarEscuta(); }, 400);
+          return;
+        }
+
         if (state.isLoading || fala.ativa || state.isListening) {
           conversa.paradoDesde = 0;
           return;
@@ -1456,6 +1516,8 @@
     function sairModoConversa(mensagem, comoErro) {
       if (!conversa.ativa) return;
       conversa.ativa = false;
+      conversa.conflitoTratado = false;
+      conversa.recebeuResultado = false;
       fala.aoFalarPedaco = null;
       clearInterval(conversa.vigia);
       conversa.vigia = null;
