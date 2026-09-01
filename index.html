@@ -974,7 +974,8 @@
 
     const conversa = {
       ativa: false,
-      buffer: "",
+      textoAnterior: "",
+      finaisSessao: "",
       timerSilencio: null,
       paradoDeProposito: false,
       ultimaReabertura: 0,
@@ -1048,13 +1049,10 @@
     // de conflito.
     let visualizadorProibido = false;
 
-<<<<<<< HEAD
-=======
     function ehAndroid() {
       return /Android/i.test(navigator.userAgent || "");
     }
 
->>>>>>> 612795b (Update project)
     function dispositivoTactil() {
       const ua = navigator.userAgent || "";
       return /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.maxTouchPoints || 0) > 1;
@@ -1306,15 +1304,12 @@
 
     function tratarResultadoConversa(event) {
       conversa.recebeuResultado = true;
-<<<<<<< HEAD
-=======
       // Reconstruir sempre a partir de event.results em vez de acumular a partir
       // de resultIndex: o motor reenvia resultados já finalizados e era isso que
       // fazia aparecer a mesma frase duas e três vezes.
       // No Android o motor repete entradas já finalizadas dentro do mesmo
       // event.results. Juntar entrada a entrada, colapsando repetições, em vez
       // de concatenar tudo em bruto.
->>>>>>> 612795b (Update project)
       let finais = "";
       let parcial = "";
       for (let i = 0; i < event.results.length; i++) {
@@ -1400,12 +1395,6 @@
       if (!recognition) return;
 
       conversa.paradoDeProposito = false;
-<<<<<<< HEAD
-      conversa.buffer = "";
-      conversa.recebeuResultado = false;
-      conversa.inicioEscuta = Date.now();
-      recognition.continuous = true;
-=======
       // O motor termina a sessão sozinho a meio de uma frase. Guardar o que já
       // foi dito, em vez de deitar fora, e continuar a partir daí.
       conversa.textoAnterior = juntarSemRepetir(conversa.textoAnterior, conversa.finaisSessao);
@@ -1415,7 +1404,6 @@
       // O Android ignora o modo contínuo: cada sessão devolve uma frase e
       // termina. Pedi-lo na mesma faz o motor reemitir resultados antigos.
       recognition.continuous = !ehAndroid();
->>>>>>> 612795b (Update project)
       recognition.interimResults = true;
       recognition.lang = state.speechLang;
 
@@ -1621,15 +1609,12 @@
       conversa.ativa = false;
       conversa.conflitoTratado = false;
       conversa.recebeuResultado = false;
-<<<<<<< HEAD
-=======
       conversa.textoAnterior = "";
       conversa.finaisSessao = "";
       conversa.inicioFala = 0;
       conversa.ultimoTextoVisto = "";
       clearTimeout(conversa.timerMaximo);
       conversa.timerMaximo = null;
->>>>>>> 612795b (Update project)
       fala.aoFalarPedaco = null;
       clearInterval(conversa.vigia);
       conversa.vigia = null;
