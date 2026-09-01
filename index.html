@@ -102,9 +102,9 @@
     <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 sm:px-6 sm:py-4 flex items-center justify-between z-10 shrink-0">
       <div class="flex items-center gap-3">
         <div class="relative">
-          <div class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shadow-lg shadow-brand-500/20">
+          <button type="button" id="logo-btn" title="Dictafone (gravar notas de voz)" class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-500 flex items-center justify-center text-white shadow-lg shadow-brand-500/20 hover:brightness-110 active:scale-95 transition-all">
             <i class="fa-solid fa-robot text-lg"></i>
-          </div>
+          </button>
           <span id="status-indicator" class="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 border-2 border-slate-900 rounded-full" title="Status de conexão"></span>
         </div>
         <div>
@@ -535,6 +535,39 @@
       </div>
     </div>
 
+    <!-- Dictafone: grava notas de voz e guarda-as por data, só no dispositivo -->
+    <div id="dictafone-overlay" class="hidden fixed inset-0 z-50 bg-slate-950/90 backdrop-blur-sm items-center justify-center p-4">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
+
+        <div class="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-2">
+            <i class="fa-solid fa-microphone-lines text-brand-400"></i>
+            <h3 class="font-bold text-slate-100 text-base">Dictafone</h3>
+          </div>
+          <button type="button" id="dictafone-fechar" title="Fechar" class="p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <div class="p-4 sm:p-5 border-b border-slate-800 flex flex-col items-center gap-3 shrink-0">
+          <button type="button" id="dictafone-gravar-btn" title="Gravar" class="h-16 w-16 rounded-full bg-brand-600 hover:bg-brand-500 text-white flex items-center justify-center transition-all shadow-lg shadow-brand-600/30">
+            <i class="fa-solid fa-microphone text-xl"></i>
+          </button>
+          <div class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="relative flex h-2 w-2">
+              <span id="dictafone-pulse" class="hidden absolute inline-flex h-full w-full rounded-full bg-red-400 pulso"></span>
+              <span id="dictafone-dot" class="relative inline-flex rounded-full h-2 w-2 bg-slate-600"></span>
+            </span>
+            <span id="dictafone-estado">Toque para gravar</span>
+          </div>
+          <p id="dictafone-parcial" class="hidden text-xs text-slate-300 text-center leading-relaxed max-h-16 overflow-y-auto px-2"></p>
+          <p id="dictafone-aviso" class="hidden text-[11px] text-amber-400 text-center"></p>
+        </div>
+
+        <div id="dictafone-lista" class="overflow-y-auto p-4 sm:p-5 space-y-4 text-xs"></div>
+      </div>
+    </div>
+
     <!-- Pedido de código para entrar nos Ajustes -->
     <div id="password-modal" class="hidden fixed inset-0 bg-slate-950/85 backdrop-blur-sm items-center justify-center p-4 z-50">
       <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xs overflow-hidden shadow-2xl">
@@ -820,6 +853,16 @@
     const settingConversaPausa = document.getElementById("setting-conversa-pausa");
     const conversaPausaDisplay = document.getElementById("conversa-pausa-display");
     const settingFraseFim = document.getElementById("setting-frase-fim");
+    const logoBtn = document.getElementById("logo-btn");
+    const dictafoneOverlay = document.getElementById("dictafone-overlay");
+    const dictafoneFechar = document.getElementById("dictafone-fechar");
+    const dictafoneGravarBtn = document.getElementById("dictafone-gravar-btn");
+    const dictafoneEstado = document.getElementById("dictafone-estado");
+    const dictafonePulse = document.getElementById("dictafone-pulse");
+    const dictafoneDot = document.getElementById("dictafone-dot");
+    const dictafoneParcial = document.getElementById("dictafone-parcial");
+    const dictafoneAviso = document.getElementById("dictafone-aviso");
+    const dictafoneLista = document.getElementById("dictafone-lista");
 
     function init() {
       settingProvider.value = state.provider;
@@ -1570,6 +1613,10 @@
         showToast("O microfone exige HTTPS (ou localhost).", "error");
         return;
       }
+      if (dictafone.gravando) {
+        showToast("Termina a gravação no dictafone antes de iniciar o modo conversa.", "info");
+        return;
+      }
 
       conversa.ativa = true;
       conversa.textoAnterior = "";
@@ -1645,6 +1692,245 @@
       micBtn.classList.remove("bg-red-500/20", "border-red-500", "text-red-400");
       micBtn.classList.add("bg-slate-800", "hover:bg-slate-700", "text-brand-300");
       micBtn.title = "Falar (reconhecimento de voz)";
+    }
+
+    // ===== DICTAFONE (notas de voz) =====
+    // Clicar no logo abre um dictafone: grava por voz e guarda o texto no
+    // localStorage, agrupado por data. Usa o seu próprio SpeechRecognition
+    // (não o `recognition` do modo conversa/mic-btn) para não interferir na
+    // lógica já delicada desses dois modos.
+
+    const DICTAFONE_KEY = "chat_dictafone_gravacoes";
+    const DICTAFONE_MAX_GRAVACOES = 500; // limite para não crescer sem fim no localStorage do telemóvel
+
+    const dictafone = {
+      ativa: false,
+      gravando: false,
+      textoAnterior: "",
+      finaisSessao: "",
+      paradoDeProposito: false,
+      timerReabertura: null,
+      ultimaReabertura: 0
+    };
+
+    let dictRecognition = null;
+
+    function carregarGravacoesDictafone() {
+      try {
+        const dados = JSON.parse(localStorage.getItem(DICTAFONE_KEY) || "[]");
+        return Array.isArray(dados) ? dados : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function guardarGravacaoDictafone(texto) {
+      const limpo = String(texto || "").trim();
+      if (!limpo) return;
+      const gravacoes = carregarGravacoesDictafone();
+      gravacoes.push({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        texto: limpo,
+        criadoEm: new Date().toISOString()
+      });
+      localStorage.setItem(DICTAFONE_KEY, JSON.stringify(gravacoes.slice(-DICTAFONE_MAX_GRAVACOES)));
+      renderizarGravacoesDictafone();
+    }
+
+    function apagarGravacaoDictafone(id) {
+      const gravacoes = carregarGravacoesDictafone().filter(g => g.id !== id);
+      localStorage.setItem(DICTAFONE_KEY, JSON.stringify(gravacoes));
+      renderizarGravacoesDictafone();
+    }
+
+    function renderizarGravacoesDictafone() {
+      const gravacoes = carregarGravacoesDictafone().slice().reverse();
+      if (!gravacoes.length) {
+        dictafoneLista.innerHTML = '<p class="text-center text-slate-500 py-6">Ainda não tens gravações.</p>';
+        return;
+      }
+
+      const grupos = new Map();
+      for (const g of gravacoes) {
+        const chave = new Date(g.criadoEm).toLocaleDateString("pt-PT", { day: "2-digit", month: "long", year: "numeric" });
+        if (!grupos.has(chave)) grupos.set(chave, []);
+        grupos.get(chave).push(g);
+      }
+
+      let html = "";
+      for (const [data, itens] of grupos) {
+        html += `<div><div class="text-[10px] uppercase tracking-wide text-slate-500 mb-2">${escapeHtml(data)}</div><div class="space-y-2">`;
+        for (const g of itens) {
+          const hora = new Date(g.criadoEm).toLocaleTimeString("pt-PT", { hour: "2-digit", minute: "2-digit" });
+          html += `
+            <div class="bg-slate-950 border border-slate-800 rounded-xl p-3">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-[10px] text-slate-500">${hora}</span>
+                <button type="button" class="dictafone-apagar p-1.5 -m-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-900 transition-colors" data-id="${escapeHtml(g.id)}" title="Apagar">
+                  <i class="fa-solid fa-trash-can text-[11px]"></i>
+                </button>
+              </div>
+              <p class="text-slate-200 leading-relaxed whitespace-pre-wrap">${escapeHtml(g.texto)}</p>
+            </div>`;
+        }
+        html += "</div></div>";
+      }
+      dictafoneLista.innerHTML = html;
+    }
+
+    // Descarta o objeto anterior e cria um novo, tal como o `recriarReconhecimento`
+    // do modo conversa: reutilizar o mesmo depois de vários stop()/start() faz o
+    // Chrome deixar de arrancar.
+    function recriarReconhecimentoDictafone() {
+      if (!SpeechRecognition) return;
+      if (dictRecognition) {
+        dictRecognition.onstart = dictRecognition.onresult = dictRecognition.onerror = dictRecognition.onend = null;
+        try { dictRecognition.abort(); } catch (_) {}
+      }
+      dictRecognition = new SpeechRecognition();
+      dictRecognition.continuous = !ehAndroid();
+      dictRecognition.interimResults = true;
+      dictRecognition.lang = state.speechLang;
+
+      dictRecognition.onresult = (event) => {
+        let finais = "";
+        let parcial = "";
+        for (let i = 0; i < event.results.length; i++) {
+          const r = event.results[i];
+          const t = ((r[0] && r[0].transcript) || "").trim();
+          if (!t) continue;
+          if (r.isFinal) finais = juntarSemRepetir(finais, t);
+          else parcial = juntarSemRepetir(parcial, t);
+        }
+        dictafone.finaisSessao = limparRepeticoes(finais);
+        const acumulado = juntarSemRepetir(dictafone.textoAnterior, dictafone.finaisSessao);
+        const combinado = juntarSemRepetir(acumulado, parcial);
+        dictafoneParcial.textContent = combinado;
+        dictafoneParcial.classList.toggle("hidden", !combinado);
+      };
+
+      dictRecognition.onerror = (event) => {
+        if (event.error === "no-speech" || event.error === "aborted") return;
+        if (event.error === "network") {
+          dictafoneAviso.textContent = "Sem rede para o reconhecimento.";
+          dictafoneAviso.classList.remove("hidden");
+          return;
+        }
+        pararGravacaoDictafone();
+        showToast(`Microfone indisponível (${event.error}).`, "error");
+      };
+
+      dictRecognition.onend = () => {
+        if (!dictafone.gravando) return;
+        if (dictafone.paradoDeProposito) {
+          finalizarGravacaoDictafone();
+          return;
+        }
+        // O motor termina a sessão sozinho ao fim de algum tempo — reabrir sem
+        // perder o que já foi dito, tal como o modo conversa faz.
+        dictafone.textoAnterior = juntarSemRepetir(dictafone.textoAnterior, dictafone.finaisSessao);
+        dictafone.finaisSessao = "";
+        const desdeUltima = Date.now() - dictafone.ultimaReabertura;
+        const espera = desdeUltima < 1000 ? 900 : 250;
+        dictafone.ultimaReabertura = Date.now();
+        dictafone.timerReabertura = setTimeout(iniciarGravacaoDictafone, espera);
+      };
+    }
+
+    function iniciarGravacaoDictafone() {
+      if (!SpeechRecognition) {
+        showToast("Este browser não suporta reconhecimento de voz. Use o Chrome ou o Edge.", "error");
+        return;
+      }
+      if (!window.isSecureContext) {
+        showToast("O microfone exige HTTPS (ou localhost).", "error");
+        return;
+      }
+      recriarReconhecimentoDictafone();
+      if (!dictRecognition) return;
+
+      dictafone.paradoDeProposito = false;
+      dictafone.gravando = true;
+      dictafoneAviso.classList.add("hidden");
+
+      try {
+        dictRecognition.start();
+      } catch (err) {
+        if (/InvalidState/i.test(String(err && err.name))) return; // já a arrancar
+        dictafone.gravando = false;
+        showToast("Não consegui abrir o microfone: " + err.message, "error");
+      }
+      atualizarEstadoDictafone();
+    }
+
+    function pararGravacaoDictafone() {
+      if (!dictafone.gravando) return;
+      dictafone.paradoDeProposito = true;
+      clearTimeout(dictafone.timerReabertura);
+      if (dictRecognition) {
+        try { dictRecognition.stop(); } catch (_) {}
+      }
+    }
+
+    function finalizarGravacaoDictafone() {
+      const texto = limparRepeticoes(juntarSemRepetir(dictafone.textoAnterior, dictafone.finaisSessao));
+      dictafone.gravando = false;
+      dictafone.textoAnterior = "";
+      dictafone.finaisSessao = "";
+      dictafoneParcial.textContent = "";
+      dictafoneParcial.classList.add("hidden");
+      atualizarEstadoDictafone();
+      if (texto) {
+        guardarGravacaoDictafone(texto);
+        showToast("Gravação guardada.");
+      }
+    }
+
+    function alternarGravacaoDictafone() {
+      if (dictafone.gravando) pararGravacaoDictafone();
+      else iniciarGravacaoDictafone();
+    }
+
+    function atualizarEstadoDictafone() {
+      const icone = dictafoneGravarBtn.querySelector("i");
+      if (dictafone.gravando) {
+        dictafoneGravarBtn.classList.add("bg-red-500", "hover:bg-red-400", "shadow-red-600/30");
+        dictafoneGravarBtn.classList.remove("bg-brand-600", "hover:bg-brand-500", "shadow-brand-600/30");
+        dictafoneGravarBtn.title = "Parar gravação";
+        icone.className = "fa-solid fa-stop text-xl";
+        dictafoneEstado.textContent = "A gravar…";
+        dictafonePulse.classList.remove("hidden");
+        dictafoneDot.classList.remove("bg-slate-600");
+        dictafoneDot.classList.add("bg-red-400");
+      } else {
+        dictafoneGravarBtn.classList.remove("bg-red-500", "hover:bg-red-400", "shadow-red-600/30");
+        dictafoneGravarBtn.classList.add("bg-brand-600", "hover:bg-brand-500", "shadow-brand-600/30");
+        dictafoneGravarBtn.title = "Gravar";
+        icone.className = "fa-solid fa-microphone text-xl";
+        dictafoneEstado.textContent = "Toque para gravar";
+        dictafonePulse.classList.add("hidden");
+        dictafoneDot.classList.remove("bg-red-400");
+        dictafoneDot.classList.add("bg-slate-600");
+      }
+    }
+
+    function abrirDictafone() {
+      if (conversa.ativa || state.isListening) {
+        showToast("Termina a conversa/gravação atual antes de abrir o dictafone.", "info");
+        return;
+      }
+      dictafone.ativa = true;
+      dictafoneOverlay.classList.remove("hidden");
+      dictafoneOverlay.classList.add("flex");
+      atualizarEstadoDictafone();
+      renderizarGravacoesDictafone();
+    }
+
+    function fecharDictafone() {
+      dictafone.ativa = false;
+      if (dictafone.gravando) pararGravacaoDictafone();
+      dictafoneOverlay.classList.add("hidden");
+      dictafoneOverlay.classList.remove("flex");
     }
 
     // ===== SELEÇÃO DE VOZ =====
@@ -1942,6 +2228,10 @@
           showToast("Reconhecimento de voz desativado nos Ajustes.", "info");
           return;
         }
+        if (dictafone.gravando) {
+          showToast("Termina a gravação no dictafone antes de usar o microfone aqui.", "info");
+          return;
+        }
         initSpeechRecognition();
         if (!recognition) return;
         if (state.isListening) {
@@ -1987,6 +2277,19 @@
         iniciarEscuta();
       });
 
+      // --- Dictafone ---
+      logoBtn.addEventListener("click", abrirDictafone);
+      dictafoneFechar.addEventListener("click", fecharDictafone);
+      dictafoneGravarBtn.addEventListener("click", alternarGravacaoDictafone);
+      dictafoneOverlay.addEventListener("click", (e) => {
+        if (e.target === dictafoneOverlay) fecharDictafone();
+      });
+      dictafoneLista.addEventListener("click", (e) => {
+        const btn = e.target.closest(".dictafone-apagar");
+        if (!btn) return;
+        apagarGravacaoDictafone(btn.dataset.id);
+      });
+
       settingConversaPausa.addEventListener("input", (e) => {
         conversaPausaDisplay.textContent = (parseFloat(e.target.value) || 1.5).toFixed(1) + "s";
       });
@@ -2009,11 +2312,23 @@
       window.addEventListener("pagehide", () => {
         sairModoConversa(null, false);
         if (speechSynthesis) pararFala();
+        // O onend do reconhecimento é assíncrono e pode não chegar a disparar
+        // antes da página fechar — guardar aqui em vez de perder a gravação.
+        if (dictafone.gravando) {
+          const texto = limparRepeticoes(juntarSemRepetir(dictafone.textoAnterior, dictafone.finaisSessao));
+          if (texto) guardarGravacaoDictafone(texto);
+          dictafone.gravando = false;
+          if (dictRecognition) { try { dictRecognition.abort(); } catch (_) {} }
+        }
       });
 
       // Sem rede, o reconhecimento do Chrome deixa de funcionar
       window.addEventListener("offline", () => {
         if (conversa.ativa) sairModoConversa("Sem rede: o modo conversa parou.", true);
+        if (dictafone.gravando) {
+          dictafoneAviso.textContent = "Sem rede para o reconhecimento.";
+          dictafoneAviso.classList.remove("hidden");
+        }
       });
     }
 
@@ -3160,6 +3475,7 @@ ${js}
       document.addEventListener("keydown", (e) => {
         if (e.key !== "Escape") return;
         if (!canvasOverlay.classList.contains("hidden")) { fecharQuadro(); return; }
+        if (!dictafoneOverlay.classList.contains("hidden")) { fecharDictafone(); return; }
         settingsModal.classList.add("hidden");
       });
 
