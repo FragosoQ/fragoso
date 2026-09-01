@@ -566,7 +566,7 @@
   <script type="module">
     // Manter igual à VERSION do sw.js. Serve para confirmar, num ecrã qualquer,
     // se o ficheiro que está a correr é mesmo o mais recente.
-    const APP_VERSAO = "v24";
+    const APP_VERSAO = "v25";
 
     // Quantas mensagens do histórico são enviadas ao Space/API (evita payloads enormes).
     const MAX_HISTORICO = 20;
@@ -912,6 +912,8 @@
         };
 
         recognition.onresult = (event) => {
+          // Um objeto anterior ainda a agonizar não pode escrever por cima.
+          if (event.target && recognition && event.target !== recognition) return;
           if (conversa.ativa) {
             tratarResultadoConversa(event);
             return;
@@ -986,6 +988,50 @@
       conflitoTratado: false
     };
 
+    // Máximo de tempo a acumular fala antes de enviar à força. Sem isto, se o
+    // motor continuar a disparar resultados, a contagem do silêncio nunca chega
+    // ao fim e a frase nunca é enviada.
+    const MAX_FALA_MS = 15000;
+
+    // Junta dois pedaços sem repetir o que já lá está.
+    function juntarSemRepetir(a, b) {
+      a = (a || "").trim();
+      b = (b || "").trim();
+      if (!a) return b;
+      if (!b) return a;
+      if (a === b) return a;
+      if (a.toLowerCase().endsWith(b.toLowerCase())) return a;
+      if (b.toLowerCase().startsWith(a.toLowerCase())) return b;
+      // Sobreposição parcial: "bom dia" + "dia como estás" -> "bom dia como estás"
+      const max = Math.min(a.length, b.length);
+      for (let n = max; n >= 4; n--) {
+        if (a.slice(-n).toLowerCase() === b.slice(0, n).toLowerCase()) {
+          return (a + b.slice(n)).replace(/\s+/g, " ").trim();
+        }
+      }
+      return (a + " " + b).replace(/\s+/g, " ").trim();
+    }
+
+    // O motor às vezes devolve a mesma frase repetida de seguida. Colapsa isso.
+    function limparRepeticoes(texto) {
+      const palavras = (texto || "").trim().split(/\s+/).filter(Boolean);
+      if (palavras.length < 4) return palavras.join(" ");
+      for (let n = Math.floor(palavras.length / 2); n >= 2; n--) {
+        const bloco = palavras.slice(0, n).join(" ").toLowerCase();
+        let repeticoes = 1;
+        while (
+          palavras.slice(n * repeticoes, n * (repeticoes + 1)).join(" ").toLowerCase() === bloco &&
+          bloco
+        ) {
+          repeticoes++;
+        }
+        if (repeticoes > 1 && n * repeticoes === palavras.length) {
+          return palavras.slice(0, n).join(" ");
+        }
+      }
+      return palavras.join(" ");
+    }
+
     // ===== VISUALIZADOR DE ÁUDIO =====
     // Lê o microfone com a Web Audio API e desenha o nível real em tempo real.
     // Enquanto o bot fala o microfone está fechado, por isso a onda é sintética.
@@ -1002,6 +1048,13 @@
     // de conflito.
     let visualizadorProibido = false;
 
+<<<<<<< HEAD
+=======
+    function ehAndroid() {
+      return /Android/i.test(navigator.userAgent || "");
+    }
+
+>>>>>>> 612795b (Update project)
     function dispositivoTactil() {
       const ua = navigator.userAgent || "";
       return /Android|iPhone|iPad|iPod/i.test(ua) || (navigator.maxTouchPoints || 0) > 1;
@@ -1162,7 +1215,7 @@
       ctx.globalAlpha = 1;
 
       // Linha de progresso do silêncio: mostra quando a frase vai ser enviada.
-      if (aOuvir && conversa.buffer && conversa.ultimoSom) {
+      if (aOuvir && (conversa.textoAnterior || conversa.finaisSessao) && conversa.ultimoSom) {
         const decorrido = Date.now() - conversa.ultimoSom;
         const total = Math.max(1, state.conversaPausa * 1000);
         const fracao = Math.min(1, decorrido / total);
@@ -1253,27 +1306,60 @@
 
     function tratarResultadoConversa(event) {
       conversa.recebeuResultado = true;
+<<<<<<< HEAD
+=======
+      // Reconstruir sempre a partir de event.results em vez de acumular a partir
+      // de resultIndex: o motor reenvia resultados já finalizados e era isso que
+      // fazia aparecer a mesma frase duas e três vezes.
+      // No Android o motor repete entradas já finalizadas dentro do mesmo
+      // event.results. Juntar entrada a entrada, colapsando repetições, em vez
+      // de concatenar tudo em bruto.
+>>>>>>> 612795b (Update project)
       let finais = "";
       let parcial = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
+      for (let i = 0; i < event.results.length; i++) {
         const r = event.results[i];
-        if (r.isFinal) finais += r[0].transcript;
-        else parcial += r[0].transcript;
+        const t = ((r[0] && r[0].transcript) || "").trim();
+        if (!t) continue;
+        if (r.isFinal) finais = juntarSemRepetir(finais, t);
+        else parcial = juntarSemRepetir(parcial, t);
       }
 
-      if (finais.trim()) conversa.buffer = (conversa.buffer + " " + finais).trim();
-      conversaParcial.textContent = (conversa.buffer + " " + parcial).trim().slice(-160);
+      conversa.finaisSessao = limparRepeticoes(finais);
+      const acumulado = juntarSemRepetir(conversa.textoAnterior, conversa.finaisSessao);
+      const combinado = juntarSemRepetir(acumulado, parcial);
+      conversaParcial.textContent = combinado.slice(-160);
 
-      // Qualquer som reinicia a contagem do silêncio.
+      // Ruído de fundo faz o motor devolver o mesmo texto vezes sem conta. Se
+      // nada mudou, não reiniciar a contagem — senão nunca se chega ao envio.
+      if (combinado === conversa.ultimoTextoVisto) return;
+      conversa.ultimoTextoVisto = combinado;
+
       conversa.ultimoSom = Date.now();
+      if (!conversa.inicioFala && (acumulado || parcial.trim())) conversa.inicioFala = Date.now();
       clearTimeout(conversa.timerSilencio);
       conversa.timerSilencio = setTimeout(aoFimDoSilencio, Math.round(state.conversaPausa * 1000));
+
+      // Travão absoluto: mesmo que os resultados não parem, envia.
+      if (conversa.inicioFala && !conversa.timerMaximo) {
+        conversa.timerMaximo = setTimeout(() => {
+          conversa.timerMaximo = null;
+          aoFimDoSilencio();
+        }, MAX_FALA_MS);
+      }
     }
 
     function aoFimDoSilencio() {
       if (!conversa.ativa) return;
-      const texto = conversa.buffer.trim();
-      conversa.buffer = "";
+      clearTimeout(conversa.timerMaximo);
+      conversa.timerMaximo = null;
+      const texto = limparRepeticoes(
+        juntarSemRepetir(conversa.textoAnterior, conversa.finaisSessao)
+      );
+      conversa.textoAnterior = "";
+      conversa.finaisSessao = "";
+      conversa.ultimoTextoVisto = "";
+      conversa.inicioFala = 0;
       conversaParcial.textContent = "";
       if (!texto) return;
 
@@ -1314,10 +1400,22 @@
       if (!recognition) return;
 
       conversa.paradoDeProposito = false;
+<<<<<<< HEAD
       conversa.buffer = "";
       conversa.recebeuResultado = false;
       conversa.inicioEscuta = Date.now();
       recognition.continuous = true;
+=======
+      // O motor termina a sessão sozinho a meio de uma frase. Guardar o que já
+      // foi dito, em vez de deitar fora, e continuar a partir daí.
+      conversa.textoAnterior = juntarSemRepetir(conversa.textoAnterior, conversa.finaisSessao);
+      conversa.finaisSessao = "";
+      conversa.recebeuResultado = false;
+      conversa.inicioEscuta = Date.now();
+      // O Android ignora o modo contínuo: cada sessão devolve uma frase e
+      // termina. Pedi-lo na mesma faz o motor reemitir resultados antigos.
+      recognition.continuous = !ehAndroid();
+>>>>>>> 612795b (Update project)
       recognition.interimResults = true;
       recognition.lang = state.speechLang;
 
@@ -1484,7 +1582,12 @@
       }
 
       conversa.ativa = true;
-      conversa.buffer = "";
+      conversa.textoAnterior = "";
+      conversa.finaisSessao = "";
+      conversa.inicioFala = 0;
+      conversa.ultimoTextoVisto = "";
+      clearTimeout(conversa.timerMaximo);
+      conversa.timerMaximo = null;
       conversa.ultimoSom = 0;
       conversaParcial.textContent = "";
       conversaResposta.textContent = "";
@@ -1518,13 +1621,21 @@
       conversa.ativa = false;
       conversa.conflitoTratado = false;
       conversa.recebeuResultado = false;
+<<<<<<< HEAD
+=======
+      conversa.textoAnterior = "";
+      conversa.finaisSessao = "";
+      conversa.inicioFala = 0;
+      conversa.ultimoTextoVisto = "";
+      clearTimeout(conversa.timerMaximo);
+      conversa.timerMaximo = null;
+>>>>>>> 612795b (Update project)
       fala.aoFalarPedaco = null;
       clearInterval(conversa.vigia);
       conversa.vigia = null;
       conversa.paradoDesde = 0;
       pararEscuta();
       pararVisualizador();
-      conversa.buffer = "";
 
       conversaOverlay.classList.add("hidden");
       conversaOverlay.classList.remove("flex");
