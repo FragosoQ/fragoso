@@ -213,15 +213,16 @@
     </main>
 
     <footer class="bg-slate-900 border-t border-slate-800 p-3 sm:p-4 shrink-0">
-      <form id="chat-form" class="flex items-end gap-2 sm:gap-3">
-        <div class="relative flex-1 bg-slate-950 border border-slate-800 rounded-xl focus-within:border-brand-500 transition-colors">
+      <form id="chat-form" class="flex flex-col sm:flex-row sm:items-end gap-2 sm:gap-3">
+        <div class="relative w-full sm:flex-1 bg-slate-950 border border-slate-800 rounded-xl focus-within:border-brand-500 transition-colors">
           <textarea
             id="user-input"
             rows="1"
             placeholder="Escreva a sua mensagem..."
-            class="w-full bg-transparent px-3 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none max-h-32"
+            class="w-full bg-transparent px-3 py-3 text-sm text-slate-100 placeholder-slate-500 focus:outline-none resize-none min-h-[84px] sm:min-h-0 max-h-32"
           ></textarea>
         </div>
+        <div class="flex items-center justify-end gap-2 sm:gap-3 sm:contents">
         <button
           type="button"
           id="conversa-btn"
@@ -253,6 +254,7 @@
         >
           <i class="fa-solid fa-paper-plane text-sm"></i>
         </button>
+        </div>
       </form>
       <div class="flex justify-between items-center mt-2 px-1 text-[11px] text-slate-500">
         <span><kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">Enter</kbd> envia · <kbd class="px-1.5 py-0.5 bg-slate-800 rounded text-[10px] text-slate-300 border border-slate-700">🎤</kbd> fala · <code class="text-brand-400">/imagem</code> desenha</span>
